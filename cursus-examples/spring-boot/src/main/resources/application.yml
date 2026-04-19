@@ -1,0 +1,19 @@
+server:
+  port: 8080
+
+cursus:
+  brokers:
+    - localhost:9000
+  producer:
+    topic: example-topic
+    partitions: 4
+    acks: one
+    batch-size: 500
+    linger-ms: 100
+    compression-type: none
+  consumer:
+    topic: example-topic
+    group-id: spring-example-group
+    mode: streaming
+    auto-commit-interval: 5s
+    max-poll-records: 100

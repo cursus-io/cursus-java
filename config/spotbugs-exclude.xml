@@ -1,0 +1,30 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  SpotBugs exclusion filter.
+
+  EI_EXPOSE_REP / EI_EXPOSE_REP2 – Lombok-generated builders, getters, and
+  setters that store or return mutable collections are flagged as exposing
+  internal representation.  These are intentional in this library's API and
+  are not security-sensitive.
+
+  CT_CONSTRUCTOR_THROW – flagged when a constructor throws after partial
+  initialisation.  Lombok/Netty bootstrap code triggers this; the objects
+  in question are not subclassable by untrusted callers.
+-->
+<FindBugsFilter>
+
+  <Match>
+    <Bug pattern="EI_EXPOSE_REP,EI_EXPOSE_REP2"/>
+  </Match>
+
+  <Match>
+    <Bug pattern="CT_CONSTRUCTOR_THROW"/>
+  </Match>
+
+  <!-- Intentional absolute path in TLS test to verify error handling -->
+  <Match>
+    <Class name="io.cursus.client.connection.ConnectionManagerTlsTest"/>
+    <Bug pattern="DMI_HARDCODED_ABSOLUTE_FILENAME"/>
+  </Match>
+
+</FindBugsFilter>

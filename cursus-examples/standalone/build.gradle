@@ -1,0 +1,15 @@
+plugins {
+    id 'application'
+}
+
+tasks.named('publish').configure { enabled = false }
+tasks.named('publishToMavenLocal').configure { enabled = false }
+
+application {
+    mainClass = project.findProperty('mainClass') ?: 'io.cursus.examples.standalone.SimpleProducer'
+}
+
+dependencies {
+    implementation project(':cursus-client')
+    runtimeOnly 'ch.qos.logback:logback-classic:1.5.16'
+}

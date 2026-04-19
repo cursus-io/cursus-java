@@ -1,0 +1,21 @@
+plugins {
+    id 'org.springframework.boot'
+    id 'io.spring.dependency-management'
+}
+
+tasks.named('publish').configure { enabled = false }
+tasks.named('publishToMavenLocal').configure { enabled = false }
+
+// No main class yet; disable bootJar until source is added
+bootJar {
+    enabled = false
+}
+
+jar {
+    enabled = true
+}
+
+dependencies {
+    implementation project(':cursus-spring-boot-starter')
+    implementation 'org.springframework.boot:spring-boot-starter-web'
+}

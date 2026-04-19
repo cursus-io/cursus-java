@@ -1,0 +1,12 @@
+pluginManagement {
+    plugins {
+        id 'org.springframework.boot' version "${springBootVersion}"
+    }
+}
+
+rootProject.name = 'cursus-java'
+
+include 'cursus-client'
+include 'cursus-spring-boot-starter'
+include 'cursus-examples:standalone'
+include 'cursus-examples:spring-boot'

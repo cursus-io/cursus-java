@@ -1,0 +1,132 @@
+import com.github.spotbugs.snom.Effort
+import com.github.spotbugs.snom.Confidence
+
+plugins {
+    id 'java-library'
+    id 'io.spring.dependency-management' version '1.1.7' apply false
+    id 'com.diffplug.spotless' version "${spotlessVersion}" apply false
+    id 'com.github.spotbugs' version "${spotbugsVersion}" apply false
+}
+
+allprojects {
+    group = project.property('group')
+    version = project.property('version')
+
+    repositories {
+        mavenCentral()
+    }
+}
+
+subprojects {
+    apply plugin: 'java-library'
+    apply plugin: 'maven-publish'
+    apply plugin: 'signing'
+
+    java {
+        sourceCompatibility = JavaVersion.VERSION_17
+        targetCompatibility = JavaVersion.VERSION_17
+        withJavadocJar()
+        withSourcesJar()
+    }
+
+    publishing {
+        publications {
+            mavenJava(MavenPublication) {
+                from components.java
+
+                pom {
+                    name = project.name
+                    description = 'Java client for the Cursus message broker'
+                    url = 'https://github.com/cursus-io/cursus-java'
+
+                    licenses {
+                        license {
+                            name = 'The Apache License, Version 2.0'
+                            url = 'https://www.apache.org/licenses/LICENSE-2.0.txt'
+                        }
+                    }
+
+                    developers {
+                        developer {
+                            id = 'cursus-io'
+                            name = 'Cursus Contributors'
+                            url = 'https://github.com/cursus-io'
+                        }
+                    }
+
+                    scm {
+                        connection = 'scm:git:git://github.com/cursus-io/cursus-java.git'
+                        developerConnection = 'scm:git:ssh://github.com/cursus-io/cursus-java.git'
+                        url = 'https://github.com/cursus-io/cursus-java'
+                    }
+                }
+            }
+        }
+
+        repositories {
+            maven {
+                name = 'MavenCentral'
+                url = version.toString().endsWith('-SNAPSHOT')
+                        ? 'https://s01.oss.sonatype.org/content/repositories/snapshots/'
+                        : 'https://s01.oss.sonatype.org/service/local/staging/deploy/maven2/'
+                credentials {
+                    username = findProperty('ossrhUsername') ?: System.getenv('OSSRH_USERNAME') ?: ''
+                    password = findProperty('ossrhPassword') ?: System.getenv('OSSRH_PASSWORD') ?: ''
+                }
+            }
+        }
+    }
+
+    signing {
+        required { !version.toString().endsWith('-SNAPSHOT') && gradle.taskGraph.hasTask('publish') }
+        def signingKey = findProperty('signing.key') ?: System.getenv('GPG_PRIVATE_KEY')
+        def signingPassword = findProperty('signing.password') ?: System.getenv('GPG_PASSPHRASE')
+        if (signingKey) {
+            useInMemoryPgpKeys(signingKey, signingPassword)
+        }
+        sign publishing.publications.mavenJava
+    }
+
+    dependencies {
+        compileOnly "org.projectlombok:lombok:${lombokVersion}"
+        annotationProcessor "org.projectlombok:lombok:${lombokVersion}"
+
+        testCompileOnly "org.projectlombok:lombok:${lombokVersion}"
+        testAnnotationProcessor "org.projectlombok:lombok:${lombokVersion}"
+
+        testImplementation "org.junit.jupiter:junit-jupiter:${junitVersion}"
+        testRuntimeOnly 'org.junit.platform:junit-platform-launcher'
+
+        compileOnly 'com.github.spotbugs:spotbugs-annotations:4.8.6'
+        testCompileOnly 'com.github.spotbugs:spotbugs-annotations:4.8.6'
+    }
+
+    test {
+        useJUnitPlatform()
+    }
+
+    apply plugin: 'com.diffplug.spotless'
+    apply plugin: 'com.github.spotbugs'
+
+    spotless {
+        java {
+            googleJavaFormat()
+            removeUnusedImports()
+            trimTrailingWhitespace()
+            endWithNewline()
+        }
+    }
+
+    spotbugs {
+        effort = Effort.valueOf('MAX')
+        reportLevel = Confidence.valueOf('MEDIUM')
+        excludeFilter = rootProject.file('config/spotbugs-exclude.xml')
+    }
+
+    tasks.withType(com.github.spotbugs.snom.SpotBugsTask).configureEach {
+        reports {
+            html.required = true
+            xml.required = false
+        }
+    }
+}

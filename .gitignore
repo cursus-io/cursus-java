@@ -1,0 +1,30 @@
+# Gradle
+.gradle/
+build/
+out/
+
+# Gradle wrapper (keep wrapper scripts, ignore local cache)
+!gradle/wrapper/gradle-wrapper.jar
+!gradle/wrapper/gradle-wrapper.properties
+!gradlew
+!gradlew.bat
+
+# IDE
+.idea/
+*.iml
+*.iws
+*.ipr
+.classpath
+.project
+.settings/
+*.eclipse
+
+# Java
+*.class
+*.jar
+*.war
+*.ear
+*.log
+
+# macOS
+.DS_Store
