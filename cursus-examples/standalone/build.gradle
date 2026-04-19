@@ -11,5 +11,5 @@ application {
 
 dependencies {
     implementation project(':cursus-client')
-    runtimeOnly 'ch.qos.logback:logback-classic:1.5.16'
+    runtimeOnly 'ch.qos.logback:logback-classic:1.5.32'
 }
