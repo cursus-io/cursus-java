@@ -39,7 +39,7 @@ jobs:
         run: ./gradlew build
 
       - name: Upload Test Results
-        uses: dorny/test-reporter@v1
+        uses: dorny/test-reporter@v3
         if: always()
         with:
           name: Test Results (Java ${{ matrix.java }})
