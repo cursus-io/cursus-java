@@ -65,6 +65,7 @@ public class CursusConsumer implements AutoCloseable {
   // Store scheduled future refs so they can be cancelled on rejoin (I4 fix)
   private volatile ScheduledFuture<?> commitFuture;
   private volatile ScheduledFuture<?> heartbeatFuture;
+  private volatile ScheduledFuture<?> metadataRefreshFuture;
 
   public CursusConsumer(CursusConsumerConfig config) {
     this(config, null);
@@ -260,8 +261,7 @@ public class CursusConsumer implements AutoCloseable {
   private void findCoordinator() {
     try {
       String cmd = CommandBuilder.findCoordinator(config.getGroupId());
-      byte[] response =
-          connectionManager.sendCommand(cmd).get(5000, TimeUnit.MILLISECONDS);
+      byte[] response = connectionManager.sendCommand(cmd).get(5000, TimeUnit.MILLISECONDS);
       String result = new String(response, StandardCharsets.UTF_8);
       if (result.startsWith("OK")) {
         String host = null, port = null;
@@ -317,14 +317,30 @@ public class CursusConsumer implements AutoCloseable {
     // Step 3: Fetch metadata for partition leaders
     fetchMetadata();
 
+    if (metadataRefreshFuture != null) {
+      metadataRefreshFuture.cancel(false);
+    }
+    long refreshMs = config.getMetadataRefreshIntervalMs();
+    if (refreshMs > 0) {
+      metadataRefreshFuture =
+          heartbeatScheduler.scheduleAtFixedRate(
+              this::fetchMetadata, refreshMs, refreshMs, TimeUnit.MILLISECONDS);
+    }
+
     // Step 4: Start per-partition consumers (each with own connection)
     // FETCH_OFFSET is done inside PartitionConsumer.start()
     for (int partition : assignedPartitions) {
       String partitionLeaderAddr = partitionLeaders.get(partition);
       PartitionConsumer pc =
           new PartitionConsumer(
-              partition, config, connectionManager, config.getGroupId(), memberId, generation,
-              coordinatorAddr, partitionLeaderAddr);
+              partition,
+              config,
+              connectionManager,
+              config.getGroupId(),
+              memberId,
+              generation,
+              coordinatorAddr,
+              partitionLeaderAddr);
       partitionConsumers.put(partition, pc);
       workerExecutor.submit(() -> pc.start(handler));
       if (metrics != null) {
@@ -496,6 +512,10 @@ public class CursusConsumer implements AutoCloseable {
     if (hf != null) {
       hf.cancel(false);
       heartbeatFuture = null;
+    }
+    if (metadataRefreshFuture != null) {
+      metadataRefreshFuture.cancel(false);
+      metadataRefreshFuture = null;
     }
   }
 

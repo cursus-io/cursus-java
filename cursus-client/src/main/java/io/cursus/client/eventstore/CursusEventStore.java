@@ -41,7 +41,10 @@ public class CursusEventStore implements AutoCloseable {
 
   private void resetSocket() {
     if (socket != null) {
-      try { socket.close(); } catch (Exception ignored) {}
+      try {
+        socket.close();
+      } catch (Exception ignored) {
+      }
       socket = null;
     }
   }
@@ -65,8 +68,11 @@ public class CursusEventStore implements AutoCloseable {
     out.flush();
 
     byte[] lenBuf = in.readNBytes(4);
-    int respLen = ((lenBuf[0] & 0xFF) << 24) | ((lenBuf[1] & 0xFF) << 16)
-        | ((lenBuf[2] & 0xFF) << 8) | (lenBuf[3] & 0xFF);
+    int respLen =
+        ((lenBuf[0] & 0xFF) << 24)
+            | ((lenBuf[1] & 0xFF) << 16)
+            | ((lenBuf[2] & 0xFF) << 8)
+            | (lenBuf[3] & 0xFF);
     byte[] resp = in.readNBytes(respLen);
     return new String(resp, StandardCharsets.UTF_8);
   }
@@ -75,14 +81,19 @@ public class CursusEventStore implements AutoCloseable {
     Socket s = getSocket();
     InputStream in = s.getInputStream();
     byte[] lenBuf = in.readNBytes(4);
-    int respLen = ((lenBuf[0] & 0xFF) << 24) | ((lenBuf[1] & 0xFF) << 16)
-        | ((lenBuf[2] & 0xFF) << 8) | (lenBuf[3] & 0xFF);
+    int respLen =
+        ((lenBuf[0] & 0xFF) << 24)
+            | ((lenBuf[1] & 0xFF) << 16)
+            | ((lenBuf[2] & 0xFF) << 8)
+            | (lenBuf[3] & 0xFF);
     return in.readNBytes(respLen);
   }
 
   public void createTopic(int partitions) {
     try {
-      String resp = sendCommand("CREATE topic=" + topic + " partitions=" + partitions + " event_sourcing=true");
+      String resp =
+          sendCommand(
+              "CREATE topic=" + topic + " partitions=" + partitions + " event_sourcing=true");
       if (resp.startsWith("ERROR")) {
         throw new CursusException("createTopic: " + resp);
       }
@@ -99,12 +110,18 @@ public class CursusEventStore implements AutoCloseable {
     try {
       int sv = event.getSchemaVersion() > 0 ? event.getSchemaVersion() : 1;
       StringBuilder cmd = new StringBuilder();
-      cmd.append("APPEND_STREAM topic=").append(topic)
-          .append(" key=").append(key)
-          .append(" version=").append(expectedVersion)
-          .append(" event_type=").append(event.getType())
-          .append(" schema_version=").append(sv)
-          .append(" producerId=").append(producerId);
+      cmd.append("APPEND_STREAM topic=")
+          .append(topic)
+          .append(" key=")
+          .append(key)
+          .append(" version=")
+          .append(expectedVersion)
+          .append(" event_type=")
+          .append(event.getType())
+          .append(" schema_version=")
+          .append(sv)
+          .append(" producerId=")
+          .append(producerId);
       if (event.getMetadata() != null && !event.getMetadata().isEmpty()) {
         cmd.append(" metadata=").append(event.getMetadata());
       }
@@ -133,6 +150,7 @@ public class CursusEventStore implements AutoCloseable {
         case "version" -> version = Long.parseLong(kv[1]);
         case "offset" -> offset = Long.parseLong(kv[1]);
         case "partition" -> partition = Integer.parseInt(kv[1]);
+        default -> {}
       }
     }
     return new AppendResult(version, offset, partition);
@@ -178,10 +196,11 @@ public class CursusEventStore implements AutoCloseable {
       if (batchData.length > 0) {
         List<CursusMessage> messages = ProtocolDecoder.decodeBatchMessages(batchData);
         for (CursusMessage m : messages) {
-          events.add(new StreamEvent(
-              m.getAggregateVersion(), m.getOffset(),
-              m.getEventType(), (int) m.getSchemaVersion(),
-              m.getPayload(), m.getMetadata()));
+          events.add(
+              new StreamEvent(
+                  m.getAggregateVersion(), m.getOffset(),
+                  m.getEventType(), (int) m.getSchemaVersion(),
+                  m.getPayload(), m.getMetadata()));
         }
       }
 
@@ -194,8 +213,16 @@ public class CursusEventStore implements AutoCloseable {
 
   public void saveSnapshot(String key, long version, String payload) {
     try {
-      String resp = sendCommand("SAVE_SNAPSHOT topic=" + topic + " key=" + key
-          + " version=" + version + " message=" + payload);
+      String resp =
+          sendCommand(
+              "SAVE_SNAPSHOT topic="
+                  + topic
+                  + " key="
+                  + key
+                  + " version="
+                  + version
+                  + " message="
+                  + payload);
       if (resp.startsWith("ERROR")) {
         throw new CursusException("saveSnapshot: " + resp);
       }

@@ -173,8 +173,8 @@ public class PartitionConsumer {
         String command =
             CommandBuilder.consume(
                 config.getTopic(), partitionId, currentOffset.get(), group, generation, member);
-        String consumeTarget = partitionLeaderAddr != null
-            ? partitionLeaderAddr : config.getBrokers().get(0);
+        String consumeTarget =
+            partitionLeaderAddr != null ? partitionLeaderAddr : config.getBrokers().get(0);
         byte[] responseBytes = sendPlainCommand(consumeTarget, command);
         String response = new String(responseBytes, StandardCharsets.UTF_8);
 
@@ -202,7 +202,11 @@ public class PartitionConsumer {
         }
 
         List<CursusMessage> messages = ProtocolDecoder.decodeBatchMessages(responseBytes);
-        log.debug("Partition {} poll: {} bytes, {} messages", partitionId, responseBytes.length, messages.size());
+        log.debug(
+            "Partition {} poll: {} bytes, {} messages",
+            partitionId,
+            responseBytes.length,
+            messages.size());
         if (messages.isEmpty()) {
           Thread.sleep(backoff.nextBackoff().toMillis());
           continue;

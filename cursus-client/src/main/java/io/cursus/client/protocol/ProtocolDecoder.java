@@ -57,8 +57,7 @@ public final class ProtocolDecoder {
   }
 
   public static boolean isErrorResponse(String response) {
-    return response != null
-        && (response.startsWith("ERROR:") || response.startsWith("ERROR "));
+    return response != null && (response.startsWith("ERROR:") || response.startsWith("ERROR "));
   }
 
   public static boolean isNotLeaderResponse(String response) {

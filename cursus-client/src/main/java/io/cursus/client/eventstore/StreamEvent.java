@@ -11,7 +11,8 @@ public class StreamEvent {
   private final String payload;
   private final String metadata;
 
-  public StreamEvent(long version, long offset, String type, int schemaVersion, String payload, String metadata) {
+  public StreamEvent(
+      long version, long offset, String type, int schemaVersion, String payload, String metadata) {
     this.version = version;
     this.offset = offset;
     this.type = type;

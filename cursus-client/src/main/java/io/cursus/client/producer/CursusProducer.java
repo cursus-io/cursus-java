@@ -14,6 +14,7 @@ import io.cursus.client.protocol.ProtocolEncoder;
 import io.cursus.client.util.Backoff;
 import io.cursus.client.util.ExecutorFactory;
 import io.cursus.client.util.FnvHash;
+import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.util.*;
@@ -43,6 +44,7 @@ public class CursusProducer implements AutoCloseable {
   private final Map<Long, BatchState> batchStates = new ConcurrentHashMap<>();
   private final Set<CompletableFuture<Void>> inflightFutures = ConcurrentHashMap.newKeySet();
   private final AtomicLong batchIdGenerator = new AtomicLong(0);
+  private final Map<Integer, String> partitionLeaders = new ConcurrentHashMap<>();
   private CursusProducerMetrics metrics;
 
   private static final Pattern PARTITION_COUNT_PATTERN = Pattern.compile("partitions=(\\d+)");
@@ -87,8 +89,15 @@ public class CursusProducer implements AutoCloseable {
       partitionBuffers[i] = new PartitionBuffer(i, config.getBatchSize(), config.getBufferSize());
     }
 
+    fetchMetadata();
+
     for (int i = 0; i < verifiedPartitions; i++) {
-      connectionManager.connectPartition(i);
+      String leaderAddr = partitionLeaders.get(i);
+      if (leaderAddr != null) {
+        connectionManager.connectPartitionToAddress(i, leaderAddr);
+      } else {
+        connectionManager.connectPartition(i);
+      }
     }
 
     log.info(
@@ -156,6 +165,61 @@ public class CursusProducer implements AutoCloseable {
           topic,
           configured);
       return configured;
+    }
+  }
+
+  private void fetchMetadata() {
+    try {
+      String cmd = CommandBuilder.metadata(config.getTopic());
+      List<String> brokers = config.getBrokers();
+      if (brokers == null || brokers.isEmpty()) return;
+      String addr = brokers.get(0);
+
+      String[] parts = addr.split(":");
+      try (java.net.Socket socket = new java.net.Socket(parts[0], Integer.parseInt(parts[1]))) {
+        socket.setSoTimeout(5000);
+        java.io.OutputStream out = socket.getOutputStream();
+        java.io.InputStream in = socket.getInputStream();
+
+        byte[] cmdBytes = cmd.getBytes(StandardCharsets.UTF_8);
+        byte[] payload = new byte[2 + cmdBytes.length];
+        System.arraycopy(cmdBytes, 0, payload, 2, cmdBytes.length);
+
+        byte[] frame = new byte[4 + payload.length];
+        frame[0] = (byte) (payload.length >> 24);
+        frame[1] = (byte) (payload.length >> 16);
+        frame[2] = (byte) (payload.length >> 8);
+        frame[3] = (byte) (payload.length);
+        System.arraycopy(payload, 0, frame, 4, payload.length);
+        out.write(frame);
+        out.flush();
+
+        byte[] lenBuf = in.readNBytes(4);
+        int respLen =
+            ((lenBuf[0] & 0xFF) << 24)
+                | ((lenBuf[1] & 0xFF) << 16)
+                | ((lenBuf[2] & 0xFF) << 8)
+                | (lenBuf[3] & 0xFF);
+        byte[] respBytes = in.readNBytes(respLen);
+        String result = new String(respBytes, StandardCharsets.UTF_8);
+
+        if (result.startsWith("OK")) {
+          for (String part : result.split("\\s+")) {
+            if (part.startsWith("leaders=")) {
+              String[] addrs = part.substring(8).split(",");
+              for (int i = 0; i < addrs.length; i++) {
+                String leaderAddr = addrs[i].trim();
+                if (!leaderAddr.isEmpty()) {
+                  partitionLeaders.put(i, leaderAddr);
+                }
+              }
+            }
+          }
+          log.info("Producer partition leaders: {}", partitionLeaders);
+        }
+      }
+    } catch (IOException e) {
+      log.debug("Producer metadata fetch failed (non-critical): {}", e.getMessage());
     }
   }
 

@@ -28,4 +28,5 @@ public class CursusConsumerConfig {
   private String tlsKeyPath;
   @Builder.Default private int maxRetries = 3;
   @Builder.Default private long maxBackoffMs = 10000;
+  @Builder.Default private long metadataRefreshIntervalMs = 30000;
 }

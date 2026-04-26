@@ -74,8 +74,7 @@ public class ConnectionManager implements AutoCloseable {
     ManagedConnection conn =
         connections.computeIfAbsent(address, addr -> connect(BrokerAddress.parse(addr)));
     CompletableFuture<byte[]> responseFuture = conn.handler.addPendingRequest();
-    conn.channel.writeAndFlush(
-        Unpooled.wrappedBuffer(command.getBytes(StandardCharsets.UTF_8)));
+    conn.channel.writeAndFlush(Unpooled.wrappedBuffer(command.getBytes(StandardCharsets.UTF_8)));
     return responseFuture;
   }
 
@@ -87,6 +86,16 @@ public class ConnectionManager implements AutoCloseable {
     ManagedConnection conn = connect(addr);
     partitionConnections.put(partitionId, conn);
     log.info("Connected partition {} to {}:{}", partitionId, addr.host(), addr.port());
+  }
+
+  public void connectPartitionToAddress(int partitionId, String address) {
+    if (closed) {
+      throw new CursusConnectionException("ConnectionManager is closed");
+    }
+    BrokerAddress addr = BrokerAddress.parse(address);
+    ManagedConnection conn = connect(addr);
+    partitionConnections.put(partitionId, conn);
+    log.info("Connected partition {} to leader {}:{}", partitionId, addr.host(), addr.port());
   }
 
   public ManagedConnection getPartitionConnection(int partitionId) {

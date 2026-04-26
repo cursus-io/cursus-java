@@ -12,12 +12,21 @@ public class EventSourcingExample {
 
       String key = "order-" + System.currentTimeMillis();
 
-      AppendResult r1 = es.append(key, 1,
-          Event.builder().type("OrderCreated").payload("{\"item\":\"widget\",\"qty\":5}").build());
+      AppendResult r1 =
+          es.append(
+              key,
+              1,
+              Event.builder()
+                  .type("OrderCreated")
+                  .payload("{\"item\":\"widget\",\"qty\":5}")
+                  .build());
       System.out.printf("Append 1: version=%d offset=%d%n", r1.getVersion(), r1.getOffset());
 
-      AppendResult r2 = es.append(key, 2,
-          Event.builder().type("OrderShipped").payload("{\"tracking\":\"ABC123\"}").build());
+      AppendResult r2 =
+          es.append(
+              key,
+              2,
+              Event.builder().type("OrderShipped").payload("{\"tracking\":\"ABC123\"}").build());
       System.out.printf("Append 2: version=%d offset=%d%n", r2.getVersion(), r2.getOffset());
 
       long ver = es.streamVersion(key);
