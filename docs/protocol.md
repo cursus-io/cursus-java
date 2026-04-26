@@ -24,6 +24,18 @@ Every message sent and received over the TCP connection is wrapped in a length-p
 └──────────────────────────────────────────────────────────────┘
 ```
 
+```mermaid
+flowchart LR
+    subgraph Frame
+        direction LR
+        A["4 bytes\nuint32 big-endian\nFrame length (N)"]
+        B["N bytes\nPayload\n(Command or batch body)"]
+        A --> B
+    end
+    C["CursusFrameEncoder\n(outbound)"] --> Frame
+    Frame --> D["CursusFrameDecoder\n(inbound)"]
+```
+
 The Netty pipeline handles framing transparently via `CursusFrameDecoder` (inbound) and `CursusFrameEncoder` (outbound). Application code never sees the length prefix.
 
 ## Commands
@@ -44,6 +56,23 @@ Text commands are UTF-8 strings. Fields are separated by a single space. The ent
 | `HEARTBEAT` | `HEARTBEAT <topic> <group> <consumerId> <memberId> <generation>` | Keep-alive; broker may respond with `REBALANCE_REQUIRED` |
 | `BATCH_COMMIT` | `BATCH_COMMIT <topic> <group> <memberId> <generation> <offsetsPayload>` | Commit offsets for multiple partitions in one round-trip |
 | `SYNC_GROUP` | `SYNC_GROUP <topic> <group> <memberId> <generation>` | Fetch partition assignment after joining a group |
+
+### Command Routing
+
+```mermaid
+flowchart TB
+    A[Outbound frame payload] --> B{Starts with\n0xBA7C magic?}
+    B -- yes --> C[Batch Message\nbinary encoding]
+    B -- no --> D[Text Command\nUTF-8 string]
+
+    C --> E[Producer path:\nProtocolEncoder.encodeBatchMessages]
+    D --> F{Command type}
+
+    F --> G[Topic management\nCREATE / DELETE / LIST]
+    F --> H[Consumer group\nJOIN_GROUP / LEAVE_GROUP\nSYNC_GROUP / SUBSCRIBE]
+    F --> I[Streaming & polling\nSTREAM / CONSUME]
+    F --> J[Offset & heartbeat\nCOMMIT / BATCH_COMMIT\nHEARTBEAT]
+```
 
 ## Batch Message Encoding
 

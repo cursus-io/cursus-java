@@ -66,6 +66,19 @@ public class ConnectionManager implements AutoCloseable {
     return send(command.getBytes(StandardCharsets.UTF_8));
   }
 
+  public CompletableFuture<byte[]> sendToAddress(String address, String command) {
+    if (closed) {
+      return CompletableFuture.failedFuture(
+          new CursusConnectionException("ConnectionManager is closed"));
+    }
+    ManagedConnection conn =
+        connections.computeIfAbsent(address, addr -> connect(BrokerAddress.parse(addr)));
+    CompletableFuture<byte[]> responseFuture = conn.handler.addPendingRequest();
+    conn.channel.writeAndFlush(
+        Unpooled.wrappedBuffer(command.getBytes(StandardCharsets.UTF_8)));
+    return responseFuture;
+  }
+
   public void connectPartition(int partitionId) {
     if (closed) {
       throw new CursusConnectionException("ConnectionManager is closed");
@@ -93,6 +106,10 @@ public class ConnectionManager implements AutoCloseable {
     CompletableFuture<byte[]> responseFuture = conn.handler.addPendingRequest();
     conn.channel.writeAndFlush(Unpooled.wrappedBuffer(data));
     return responseFuture;
+  }
+
+  public CompletableFuture<byte[]> sendCommandOnPartition(int partitionId, String command) {
+    return sendOnPartition(partitionId, command.getBytes(StandardCharsets.UTF_8));
   }
 
   /** Returns the handler for a partition connection, allowing push-mode setup for streaming. */

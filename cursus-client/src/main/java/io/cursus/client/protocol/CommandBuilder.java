@@ -123,4 +123,12 @@ public final class CommandBuilder {
   public static String leaveGroup(String topic, String group, String member) {
     return "LEAVE_GROUP topic=" + topic + " group=" + group + " member=" + member;
   }
+
+  public static String findCoordinator(String group) {
+    return "FIND_COORDINATOR group=" + group;
+  }
+
+  public static String metadata(String topic) {
+    return "METADATA topic=" + topic;
+  }
 }

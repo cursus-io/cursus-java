@@ -29,100 +29,101 @@ cursus-java (root Gradle project)
 
 ## Layer Diagram
 
-```
-┌───────────────────────────────────────────────────────┐
-│  Public API                                           │
-│  CursusProducer  ·  CursusConsumer  ·  @CursusListener│
-├───────────────────────────────────────────────────────┤
-│  Configuration Layer                                  │
-│  CursusProducerConfig  ·  CursusConsumerConfig        │
-│  CursusProperties (Spring)                            │
-├───────────────────────────────────────────────────────┤
-│  Protocol Layer                                       │
-│  ProtocolEncoder  ·  ProtocolDecoder  ·  CommandBuilder│
-├───────────────────────────────────────────────────────┤
-│  Connection Layer                                     │
-│  ConnectionManager  ·  CursusClientHandler            │
-├───────────────────────────────────────────────────────┤
-│  Netty Pipeline                                       │
-│  CursusFrameDecoder (4-byte length prefix)            │
-│  CursusFrameEncoder (4-byte length prefix)            │
-├───────────────────────────────────────────────────────┤
-│  Transport: TCP / NioEventLoopGroup                   │
-├───────────────────────────────────────────────────────┤
-│  Cursus Broker (Go)   port 9000                       │
-└───────────────────────────────────────────────────────┘
+```mermaid
+flowchart TB
+    A["Public API\nCursusProducer · CursusConsumer · @CursusListener"]
+    B["Configuration Layer\nCursusProducerConfig · CursusConsumerConfig · CursusProperties (Spring)"]
+    C["Protocol Layer\nProtocolEncoder · ProtocolDecoder · CommandBuilder"]
+    D["Connection Layer\nConnectionManager · CursusClientHandler"]
+    E["Netty Pipeline\nCursusFrameDecoder (4-byte length prefix)\nCursusFrameEncoder (4-byte length prefix)"]
+    F["Transport: TCP / NioEventLoopGroup"]
+    G["Cursus Broker (Go)   port 9000"]
+
+    A --> B --> C --> D --> E --> F --> G
 ```
 
 ## Producer Data Flow
 
-```
-Application calls producer.send(payload, key)
-          │
-          ▼
-Partition selection
-  key != null  →  FnvHash.partition(key, numPartitions)   [FNV-1a mod]
-  key == null  →  roundRobinCounter % numPartitions
-          │
-          ▼
-PartitionBuffer.add(payload, key)          returns seqNum
-          │
-          ▼
-Buffer reaches batchSize?  ──yes──►  PartitionBuffer.drain()
-lingerMs timer fires?      ──yes──►  PartitionBuffer.forceFlush()
-producer.flush() called?   ──yes──►  all buffers forceFlush()
-          │
-          ▼
-ProtocolEncoder.encodeBatchMessages(...)
-  magic 0xBA7C + header (topic, partition, acks, idempotent,
-  seqStart, seqEnd, count) + per-message fields
-          │
-          ▼
-compressionType != "none"?  ──yes──►  CursusCompressor.compress(bytes)
-          │
-          ▼
-ConnectionManager.send(bytes)
-  → resolveLeader()  → NioSocketChannel.writeAndFlush()
-          │
-          ▼ (async CompletableFuture)
-CursusClientHandler receives response bytes
-          │
-          ▼
-ProtocolDecoder.decodeAckResponse(bytes)  →  AckResponse
-  status == "OK"  →  uniqueAckCount += batch.size()
-  NOT_LEADER      →  updateLeader(null), retry with backoff
-  error           →  retry up to maxRetries
+```mermaid
+sequenceDiagram
+    participant App as Application
+    participant P as CursusProducer
+    participant PB as PartitionBuffer
+    participant PE as ProtocolEncoder
+    participant CC as CursusCompressor
+    participant CM as ConnectionManager
+    participant B as Cursus Broker
+
+    App->>P: send(payload, key)
+    Note over P: Partition selection<br/>key != null → FnvHash.partition(key, N)<br/>key == null → roundRobin % N
+    P->>PB: add(payload, key) → seqNum
+    P-->>App: returns seqNum
+
+    alt batchSize reached
+        PB->>PB: drain()
+    else lingerMs timer fires
+        PB->>PB: forceFlush()
+    else producer.flush() called
+        PB->>PB: forceFlush() all buffers
+    end
+
+    PB->>PE: encodeBatchMessages(...)
+    Note over PE: magic 0xBA7C + header<br/>(topic, partition, acks,<br/>idempotent, seqStart, seqEnd,<br/>count) + per-message fields
+
+    alt compressionType != "none"
+        PE->>CC: compress(bytes)
+        CC-->>PE: compressed bytes
+    end
+
+    PE->>CM: send(bytes)
+    CM->>CM: resolveLeader()
+    CM->>B: NioSocketChannel.writeAndFlush()
+
+    B-->>CM: ACK response bytes (async)
+    CM->>P: ProtocolDecoder.decodeAckResponse(bytes)
+
+    alt status == "OK"
+        P->>P: uniqueAckCount += batch.size()
+    else NOT_LEADER
+        P->>P: updateLeader(null), retry with backoff
+    else error
+        P->>P: retry up to maxRetries
+    end
 ```
 
 ## Consumer Data Flow
 
-```
-Broker  ──TCP──►  CursusFrameDecoder  ──►  CursusClientHandler
-                  (strips 4-byte length prefix, max 64 MB)
-                          │
-                          ▼
-                  CompletableFuture<byte[]> resolved
-                          │
-                   PartitionConsumer
-                          │
-           ┌──────────────┴──────────────┐
-           │ STREAMING mode              │ POLLING mode
-           │ STREAM topic part offset    │ CONSUME topic part offset
-           │ broker pushes frames        │ client polls each loop iter
-           └──────────────┬──────────────┘
-                          │
-                  ProtocolDecoder.decodeBatchMessages(bytes)
-                          │
-                          ▼
-                  for each CursusMessage → handler.accept(msg)
-                          │
-                          ▼
-                  currentOffset = msg.getOffset() + 1
-                          │
-                  commitScheduler (autoCommitInterval)
-                          │
-                  CommandBuilder.commit(topic, groupId, partition, offset)
-                  ConnectionManager.sendCommand(cmd)
+```mermaid
+sequenceDiagram
+    participant B as Cursus Broker
+    participant FD as CursusFrameDecoder
+    participant CH as CursusClientHandler
+    participant PC as PartitionConsumer
+    participant PD as ProtocolDecoder
+    participant H as Message Handler
+    participant CS as Commit Scheduler
+    participant CM as ConnectionManager
+
+    B->>FD: TCP frame (4-byte length prefix + payload, max 64 MB)
+    FD->>CH: stripped payload bytes
+    CH->>CH: CompletableFuture<byte[]> resolved
+    CH->>PC: bytes
+
+    alt STREAMING mode
+        Note over PC,B: STREAM topic partition offset<br/>Broker pushes frames continuously
+    else POLLING mode
+        Note over PC,B: CONSUME topic partition offset<br/>Client polls each loop iteration
+    end
+
+    PC->>PD: decodeBatchMessages(bytes)
+    loop for each CursusMessage
+        PD->>H: handler.accept(msg)
+        PC->>PC: currentOffset = msg.getOffset() + 1
+    end
+
+    CS->>CS: autoCommitInterval fires
+    CS->>CM: CommandBuilder.commit(topic, groupId, partition, offset)
+    CM->>B: COMMIT command
 ```
 
 ## Go SDK Mapping
