@@ -52,6 +52,22 @@ cursus:
 
 See [Configuration Reference](configuration-reference.md) for a complete list with types and defaults.
 
+## Auto-Configuration Flow
+
+```mermaid
+flowchart TB
+    A["Spring Boot application starts"] --> B["Auto-configuration loaded\nvia spring.factories / AutoConfiguration.imports"]
+    B --> C["CursusAutoConfiguration evaluates\n@ConditionalOnProperty conditions"]
+    C --> D{cursus.producer.topic\npresent?}
+    C --> E{cursus.consumer.topic\npresent?}
+    D -- yes --> F["CursusProducer bean created\nfrom CursusProducerConfig"]
+    D -- no --> G["Producer bean skipped"]
+    E -- yes --> H["CursusConsumer bean created\nfrom CursusConsumerConfig"]
+    E -- no --> I["Consumer bean skipped"]
+    B --> J["CursusListenerRegistrar\n(BeanPostProcessor) scans all beans\nfor @CursusListener methods"]
+    J --> K["For each @CursusListener method:\ncreate CursusConsumer instance\nrun on cursus-listener thread pool"]
+```
+
 ## Auto-Configured Beans
 
 ### CursusProducer
@@ -96,6 +112,31 @@ A `CursusConsumer` bean is created when `cursus.consumer.topic` is set. This bea
 ## @CursusListener Annotation
 
 Annotate any `void` method on a Spring-managed bean (`@Service`, `@Component`, etc.) with `@CursusListener`. The method must accept a single `CursusMessage` parameter.
+
+### @CursusListener Processing Flow
+
+```mermaid
+sequenceDiagram
+    participant SC as Spring Context
+    participant LR as CursusListenerRegistrar
+    participant CC as CursusConsumer
+    participant B as Cursus Broker
+    participant M as @CursusListener method
+
+    SC->>LR: postProcessAfterInitialization(bean)
+    LR->>LR: scan bean methods for @CursusListener
+    LR->>CC: new CursusConsumer(config from annotation + cursus.brokers)
+    LR->>CC: start(msg -> method.invoke(bean, msg))\non cursus-listener thread pool
+
+    loop receiving messages
+        B->>CC: push/poll batch
+        CC->>M: invoke(bean, message)
+    end
+
+    SC->>LR: destroy() — application shutdown
+    LR->>CC: close() for each managed consumer
+    CC->>B: LEAVE_GROUP
+```
 
 ```java
 import io.cursus.client.message.CursusMessage;

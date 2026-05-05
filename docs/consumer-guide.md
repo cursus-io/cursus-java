@@ -64,6 +64,26 @@ The consumer sends a `STREAM topic partition offset` command and then the broker
 
 The consumer sends a `CONSUME topic partition offset` command for each poll cycle. After receiving a batch it loops immediately; if the broker returns an empty response it backs off before retrying. Use polling when you want pull-based flow control or when integrating with a framework that has its own polling loop.
 
+### Mode Comparison
+
+```mermaid
+flowchart LR
+    subgraph STREAMING
+        direction TB
+        S1["STREAM topic partition offset"] --> S2["Broker pushes batches\ncontinuously"]
+        S2 --> S3["Long-lived connection\nauto-reconnects"]
+        S3 --> S4["Low latency\nHigh throughput"]
+    end
+    subgraph POLLING
+        direction TB
+        P1["CONSUME topic partition offset"] --> P2{Empty\nresponse?}
+        P2 -- yes --> P3["Back off, retry"]
+        P3 --> P1
+        P2 -- no --> P4["Process batch,\nloop immediately"]
+        P4 --> P1
+    end
+```
+
 ## Consumer Groups
 
 Set `groupId` to make the consumer a member of a named group. The broker assigns a subset of the topic's partitions to each group member using modulo-based assignment.
@@ -74,6 +94,34 @@ The consumer performs the full group lifecycle automatically:
 2. **SYNC_GROUP** — sends `SYNC_GROUP topic groupId memberId generation`. The broker returns the list of partition numbers assigned to this member.
 3. **Heartbeat** — every `heartbeatIntervalMs` the consumer sends `HEARTBEAT` to keep the session alive. If the broker replies with `REBALANCE_REQUIRED` or `GEN_MISMATCH`, the consumer stops its partition consumers and rejoins the group.
 4. **LEAVE_GROUP** — sent automatically when `close()` is called.
+
+```mermaid
+sequenceDiagram
+    participant C as CursusConsumer
+    participant B as Cursus Broker
+
+    C->>B: JOIN_GROUP topic groupId consumerId
+    B-->>C: membership info (memberId, generation)
+
+    C->>B: SYNC_GROUP topic groupId memberId generation
+    B-->>C: assigned partition list
+
+    loop every heartbeatIntervalMs
+        C->>B: HEARTBEAT topic groupId consumerId memberId generation
+        alt normal
+            B-->>C: OK
+        else rebalance needed
+            B-->>C: REBALANCE_REQUIRED or GEN_MISMATCH
+            C->>C: stop PartitionConsumers
+            C->>B: JOIN_GROUP (rejoin)
+        end
+    end
+
+    Note over C,B: consuming messages...
+
+    C->>B: LEAVE_GROUP topic groupId consumerId
+    B-->>C: partitions reassigned to remaining members
+```
 
 Multiple consumers in the same group can be started as separate processes or as separate `CursusConsumer` instances within the same JVM:
 
@@ -98,6 +146,24 @@ for (int i = 0; i < 2; i++) {
 ## Offset Management
 
 Offsets are committed automatically on a periodic schedule controlled by `autoCommitInterval` (default 5 seconds). Internally the commit scheduler calls `COMMIT topic groupId partition offset` for each active partition consumer.
+
+```mermaid
+sequenceDiagram
+    participant B as Cursus Broker
+    participant PC as PartitionConsumer
+    participant H as Message Handler
+    participant CS as Commit Scheduler
+
+    B->>PC: batch of messages
+    loop for each message
+        PC->>H: handler.accept(msg)
+        PC->>PC: currentOffset = msg.getOffset() + 1
+    end
+
+    Note over CS: autoCommitInterval elapses (default 5s)
+    CS->>B: COMMIT topic groupId partition currentOffset
+    B-->>CS: OK
+```
 
 You do not need to call any commit method manually unless you want finer control. If you require lower commit latency, reduce `autoCommitInterval`:
 

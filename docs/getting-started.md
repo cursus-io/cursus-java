@@ -133,6 +133,21 @@ Run it in a second terminal while the producer is running:
 ./gradlew :cursus-examples:standalone:run --main-class io.cursus.examples.standalone.SimpleConsumer
 ```
 
+## Quick Start Flow
+
+```mermaid
+flowchart TB
+    A["Add dependency\ncursus-client or\ncursus-spring-boot-starter"] --> B["Start Cursus broker\ndocker run -p 9000:9000 cursusio/cursus:latest"]
+    B --> C["Build CursusProducerConfig\n.brokers() .topic() .partitions() .acks()"]
+    C --> D["Construct CursusProducer\ntry-with-resources or shutdown hook"]
+    D --> E["producer.send(payload)"]
+    E --> F["producer.flush()\nwait for ACKs"]
+    F --> G["Build CursusConsumerConfig\n.brokers() .topic() .groupId() .consumerMode()"]
+    G --> H["Construct CursusConsumer\nregister shutdown hook"]
+    H --> I["consumer.start(handler)\nblocks — receives messages"]
+    I --> J["Ctrl+C → shutdown hook\nconsumer.close() → LEAVE_GROUP"]
+```
+
 ## Next steps
 
 - [Producer Guide](producer-guide.md) — batching, compression, idempotency, monitoring

@@ -15,13 +15,14 @@ import java.util.concurrent.atomic.AtomicInteger;
 public class ProduceAndConsume {
 
   public static void main(String[] args) throws Exception {
+    String broker = args.length > 0 ? args[0] : "localhost:9000";
     String topic = "e2e-test-" + System.currentTimeMillis();
     int messageCount = 5;
 
     // === Produce ===
     CursusProducerConfig prodConfig =
         CursusProducerConfig.builder()
-            .brokers(List.of("localhost:9000"))
+            .brokers(List.of(broker))
             .topic(topic)
             .partitions(1)
             .acks(Acks.ONE)
@@ -41,9 +42,9 @@ public class ProduceAndConsume {
     // === Consume ===
     CursusConsumerConfig consConfig =
         CursusConsumerConfig.builder()
-            .brokers(List.of("localhost:9000"))
+            .brokers(List.of(broker))
             .topic(topic)
-            .groupId("e2e-group")
+            .groupId("e2e-group-" + System.currentTimeMillis())
             .consumerMode(ConsumerMode.POLLING)
             .maxPollRecords(100)
             .build();

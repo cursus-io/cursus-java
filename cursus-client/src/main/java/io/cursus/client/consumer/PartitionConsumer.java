@@ -42,10 +42,13 @@ public class PartitionConsumer {
   private final String group;
   private final String member;
   private final int generation;
+  private final String coordinatorAddr;
+  private volatile String partitionLeaderAddr;
   private final AtomicLong currentOffset = new AtomicLong(0);
   private final AtomicLong committedOffset = new AtomicLong(0);
   private final AtomicBoolean running = new AtomicBoolean(false);
   private final AtomicBoolean rebalanceRequired = new AtomicBoolean(false);
+  private byte[] response;
 
   public PartitionConsumer(
       int partitionId,
@@ -53,13 +56,17 @@ public class PartitionConsumer {
       ConnectionManager connectionManager,
       String group,
       String member,
-      int generation) {
+      int generation,
+      String coordinatorAddr,
+      String partitionLeaderAddr) {
     this.partitionId = partitionId;
     this.config = config;
     this.connectionManager = connectionManager;
     this.group = group;
     this.member = member;
     this.generation = generation;
+    this.coordinatorAddr = coordinatorAddr;
+    this.partitionLeaderAddr = partitionLeaderAddr;
   }
 
   /**
@@ -122,12 +129,12 @@ public class PartitionConsumer {
     for (int attempt = 0; attempt < 3; attempt++) {
       try {
         String cmd = CommandBuilder.fetchOffset(config.getTopic(), partitionId, group);
-        byte[] response =
-            connectionManager
-                .sendCommand(cmd)
-                .get(config.getSessionTimeoutMs(), TimeUnit.MILLISECONDS);
+        String target = coordinatorAddr != null ? coordinatorAddr : config.getBrokers().get(0);
+        response = sendPlainCommand(target, cmd);
         String result = new String(response, StandardCharsets.UTF_8).trim();
-        if (result.isEmpty() || ProtocolDecoder.isErrorResponse(result)) {
+        if (result.isEmpty()
+            || ProtocolDecoder.isErrorResponse(result)
+            || result.startsWith("NOT_AUTHORIZED")) {
           throw new CursusProtocolException("Fetch offset error: " + result);
         }
         return Long.parseLong(result);
@@ -157,7 +164,7 @@ public class PartitionConsumer {
         "Failed to fetch offset for partition " + partitionId + " after 3 attempts");
   }
 
-  /** Polling mode: send CONSUME, read one response, process messages, sleep, repeat. */
+  /** Polling mode: send CONSUME via plain socket (like Python SDK), process messages, repeat. */
   private void runPollingLoop(Consumer<CursusMessage> handler) {
     Backoff backoff =
         new Backoff(Duration.ofMillis(100), Duration.ofMillis(config.getMaxBackoffMs()));
@@ -166,11 +173,22 @@ public class PartitionConsumer {
         String command =
             CommandBuilder.consume(
                 config.getTopic(), partitionId, currentOffset.get(), group, generation, member);
-        byte[] responseBytes =
-            connectionManager
-                .sendOnPartition(partitionId, command.getBytes(StandardCharsets.UTF_8))
-                .get(config.getSessionTimeoutMs(), TimeUnit.MILLISECONDS);
+        String consumeTarget =
+            partitionLeaderAddr != null ? partitionLeaderAddr : config.getBrokers().get(0);
+        byte[] responseBytes = sendPlainCommand(consumeTarget, command);
         String response = new String(responseBytes, StandardCharsets.UTF_8);
+
+        if (response.contains("NOT_LEADER LEADER_IS")) {
+          String[] parts = response.split("\\s+");
+          for (int i = 0; i < parts.length; i++) {
+            if ("LEADER_IS".equals(parts[i]) && i + 1 < parts.length) {
+              partitionLeaderAddr = parts[i + 1];
+              log.info("Partition {} leader updated to {}", partitionId, partitionLeaderAddr);
+              break;
+            }
+          }
+          continue;
+        }
 
         if (ProtocolDecoder.isErrorResponse(response)) {
           log.warn("Partition {} poll error: {}", partitionId, response);
@@ -184,6 +202,11 @@ public class PartitionConsumer {
         }
 
         List<CursusMessage> messages = ProtocolDecoder.decodeBatchMessages(responseBytes);
+        log.debug(
+            "Partition {} poll: {} bytes, {} messages",
+            partitionId,
+            responseBytes.length,
+            messages.size());
         if (messages.isEmpty()) {
           Thread.sleep(backoff.nextBackoff().toMillis());
           continue;
@@ -234,7 +257,11 @@ public class PartitionConsumer {
       String command =
           CommandBuilder.stream(
               config.getTopic(), partitionId, group, currentOffset.get(), generation, member);
-      connectionManager.sendOnPartition(partitionId, command.getBytes(StandardCharsets.UTF_8));
+      if (coordinatorAddr != null) {
+        connectionManager.sendToAddress(coordinatorAddr, command);
+      } else {
+        connectionManager.sendCommandOnPartition(partitionId, command);
+      }
 
       while (running.get()) {
         try {
@@ -270,8 +297,7 @@ public class PartitionConsumer {
             String restream =
                 CommandBuilder.stream(
                     config.getTopic(), partitionId, group, currentOffset.get(), generation, member);
-            connectionManager.sendOnPartition(
-                partitionId, restream.getBytes(StandardCharsets.UTF_8));
+            connectionManager.sendCommandOnPartition(partitionId, restream);
           } catch (InterruptedException ie) {
             Thread.currentThread().interrupt();
             return;
@@ -286,6 +312,41 @@ public class PartitionConsumer {
     }
   }
 
+  private byte[] sendPlainCommand(String addr, String command) throws Exception {
+    String[] parts = addr.split(":");
+    String host = parts[0];
+    int port = Integer.parseInt(parts[1]);
+
+    try (java.net.Socket socket = new java.net.Socket(host, port)) {
+      socket.setSoTimeout((int) config.getSessionTimeoutMs());
+      java.io.OutputStream out = socket.getOutputStream();
+      java.io.InputStream in = socket.getInputStream();
+
+      // Wrap with encode_message("", cmd) — 2-byte topic length prefix (0x0000) + command
+      byte[] cmdBytes = command.getBytes(StandardCharsets.UTF_8);
+      byte[] payload = new byte[2 + cmdBytes.length];
+      // payload[0] and payload[1] are already 0x00 (empty topic length)
+      System.arraycopy(cmdBytes, 0, payload, 2, cmdBytes.length);
+
+      byte[] frame = new byte[4 + payload.length];
+      frame[0] = (byte) (payload.length >> 24);
+      frame[1] = (byte) (payload.length >> 16);
+      frame[2] = (byte) (payload.length >> 8);
+      frame[3] = (byte) (payload.length);
+      System.arraycopy(payload, 0, frame, 4, payload.length);
+      out.write(frame);
+      out.flush();
+
+      byte[] lenBuf = in.readNBytes(4);
+      int respLen =
+          ((lenBuf[0] & 0xFF) << 24)
+              | ((lenBuf[1] & 0xFF) << 16)
+              | ((lenBuf[2] & 0xFF) << 8)
+              | (lenBuf[3] & 0xFF);
+      return in.readNBytes(respLen);
+    }
+  }
+
   /** Commits the current offset for this partition using COMMIT_OFFSET on the leader connection. */
   public void commitOffset() {
     long offset = currentOffset.get();
@@ -294,7 +355,8 @@ public class PartitionConsumer {
       String command =
           CommandBuilder.commitOffset(
               config.getTopic(), partitionId, group, offset, generation, member);
-      connectionManager.sendCommand(command).get(5000, TimeUnit.MILLISECONDS);
+      String target = coordinatorAddr != null ? coordinatorAddr : config.getBrokers().get(0);
+      sendPlainCommand(target, command);
       committedOffset.set(offset);
     } catch (Exception e) {
       log.warn(

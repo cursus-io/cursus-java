@@ -47,6 +47,16 @@ producer.send("payload", "customer-123");
 // partition = Math.abs(FNV-1a("customer-123") % numPartitions)
 ```
 
+```mermaid
+flowchart TB
+    A["producer.send(payload, key?)"] --> B{key provided?}
+    B -- yes --> C["FnvHash.partition(key, numPartitions)\nFNV-1a mod — deterministic"]
+    B -- no --> D["roundRobinCounter++ % numPartitions\nRound-robin distribution"]
+    C --> E["PartitionBuffer[N].add(payload, key)"]
+    D --> E
+    E --> F["returns seqNum"]
+```
+
 The FNV-1a hash is the same algorithm used by the Go SDK (`hash/fnv`), so a given key always maps to the same partition number regardless of which SDK produced the message. Messages with the same key are always routed to the same partition, preserving ordering for that key.
 
 ## Batching
@@ -55,6 +65,23 @@ Messages accumulate in a per-partition buffer and are flushed as a batch when ei
 
 - **`batchSize`** — the buffer holds this many messages before flushing automatically.
 - **`lingerMs`** — a background scheduler fires every `lingerMs` milliseconds and flushes all non-empty buffers.
+
+```mermaid
+flowchart TB
+    A["Message added to PartitionBuffer"] --> B{batchSize\nreached?}
+    B -- yes --> D["PartitionBuffer.drain()\nauto-flush"]
+    B -- no --> C{lingerMs\ntimer fires?}
+    C -- yes --> E["PartitionBuffer.forceFlush()"]
+    C -- no --> F{producer.flush()\ncalled?}
+    F -- yes --> G["All buffers forceFlush()"]
+    F -- no --> A
+
+    D --> H["ProtocolEncoder.encodeBatchMessages()"]
+    E --> H
+    G --> H
+    H --> I["ConnectionManager.send(bytes)"]
+    I --> J["Broker ACK → uniqueAckCount++"]
+```
 
 You can also flush all partitions synchronously:
 
