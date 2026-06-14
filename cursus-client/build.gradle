@@ -3,8 +3,8 @@ dependencies {
     api "org.slf4j:slf4j-api:${slf4jVersion}"
     implementation 'com.fasterxml.jackson.core:jackson-databind:2.18.3'
 
-    compileOnly 'io.micrometer:micrometer-core:1.16.5'
-    testImplementation 'io.micrometer:micrometer-core:1.16.5'
+    compileOnly 'io.micrometer:micrometer-core:1.17.0'
+    testImplementation 'io.micrometer:micrometer-core:1.17.0'
 
     testImplementation 'org.assertj:assertj-core:3.27.7'
     testRuntimeOnly 'ch.qos.logback:logback-classic:1.5.32'
