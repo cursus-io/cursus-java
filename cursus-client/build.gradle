@@ -7,5 +7,5 @@ dependencies {
     testImplementation 'io.micrometer:micrometer-core:1.16.5'
 
     testImplementation 'org.assertj:assertj-core:3.27.7'
-    testRuntimeOnly 'ch.qos.logback:logback-classic:1.5.32'
+    testRuntimeOnly 'ch.qos.logback:logback-classic:1.5.37'
 }
