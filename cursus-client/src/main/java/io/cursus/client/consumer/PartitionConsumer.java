@@ -137,7 +137,7 @@ public class PartitionConsumer {
             || result.startsWith("NOT_AUTHORIZED")) {
           throw new CursusProtocolException("Fetch offset error: " + result);
         }
-        return Long.parseLong(result);
+        return ProtocolDecoder.decodeOffsetResponse(result);
       } catch (NumberFormatException e) {
         log.warn("Partition {} could not parse offset on attempt {}", partitionId, attempt + 1);
       } catch (InterruptedException e) {

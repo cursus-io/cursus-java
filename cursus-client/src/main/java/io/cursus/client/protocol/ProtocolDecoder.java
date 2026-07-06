@@ -7,7 +7,9 @@ import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 
 /**
  * Decodes Cursus binary wire protocol messages. Matches Go SDK's protocol.go DecodeBatchMessages
@@ -56,6 +58,67 @@ public final class ProtocolDecoder {
     return messages;
   }
 
+  public static Map<String, String> decodeOkFields(String response) {
+    String resp = response == null ? "" : response.trim();
+    Map<String, String> fields = new HashMap<>();
+    if (!resp.startsWith("OK")) return fields;
+
+    String[] parts = resp.split("\\s+");
+    for (int i = 1; i < parts.length; i++) {
+      int sep = parts[i].indexOf('=');
+      if (sep > 0) {
+        fields.put(parts[i].substring(0, sep), parts[i].substring(sep + 1));
+      }
+    }
+    return fields;
+  }
+
+  public static long decodeOffsetResponse(String response) {
+    String resp = response == null ? "" : response.trim();
+    if (isErrorResponse(resp)) {
+      throw new CursusProtocolException("Broker error: " + resp);
+    }
+
+    Map<String, String> fields = decodeOkFields(resp);
+    if (fields.isEmpty()) {
+      throw new CursusProtocolException("Unexpected offset response: " + resp);
+    }
+    String value = fields.get("offset");
+    if (value == null) {
+      throw new CursusProtocolException("Missing offset in response: " + resp);
+    }
+    return parseLongField(value, "offset", resp);
+  }
+
+  public static long decodeVersionResponse(String response) {
+    String resp = response == null ? "" : response.trim();
+    if (isErrorResponse(resp)) {
+      throw new CursusProtocolException("Broker error: " + resp);
+    }
+
+    Map<String, String> fields = decodeOkFields(resp);
+    if (fields.isEmpty()) {
+      throw new CursusProtocolException("Unexpected version response: " + resp);
+    }
+    String value = fields.get("version");
+    if (value == null) {
+      throw new CursusProtocolException("Missing version in response: " + resp);
+    }
+    return parseLongField(value, "version", resp);
+  }
+
+  public static String decodeSnapshotResponse(String response) {
+    String resp = response == null ? "" : response.trim();
+    if (isErrorResponse(resp)) {
+      throw new CursusProtocolException("Broker error: " + resp);
+    }
+    if ("OK snapshot=null".equals(resp)) return null;
+    if (resp.startsWith("OK snapshot=")) {
+      return resp.substring("OK snapshot=".length());
+    }
+    throw new CursusProtocolException("Unexpected snapshot response: " + resp);
+  }
+
   public static boolean isErrorResponse(String response) {
     return response != null && (response.startsWith("ERROR:") || response.startsWith("ERROR "));
   }
@@ -67,6 +130,14 @@ public final class ProtocolDecoder {
   public static boolean isRebalanceRequired(String response) {
     return response != null
         && (response.contains("REBALANCE_REQUIRED") || response.contains("GEN_MISMATCH"));
+  }
+
+  private static long parseLongField(String value, String field, String response) {
+    try {
+      return Long.parseLong(value);
+    } catch (NumberFormatException e) {
+      throw new CursusProtocolException("Invalid " + field + " in response: " + response, e);
+    }
   }
 
   private static CursusMessage decodeMessageFromBatch(ByteBuffer buf) {

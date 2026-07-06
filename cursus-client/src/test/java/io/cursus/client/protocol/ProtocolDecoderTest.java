@@ -1,6 +1,7 @@
 package io.cursus.client.protocol;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import io.cursus.client.message.AckResponse;
 import io.cursus.client.message.CursusMessage;
@@ -100,5 +101,36 @@ class ProtocolDecoderTest {
     assertThat(decoded.get(1).getPayload()).isEqualTo("second");
     assertThat(decoded.get(0).getSeqNum()).isEqualTo(10);
     assertThat(decoded.get(1).getSeqNum()).isEqualTo(11);
+  }
+
+  @Test
+  void decodeOffsetResponseOk() {
+    assertThat(ProtocolDecoder.decodeOffsetResponse("OK offset=42")).isEqualTo(42);
+  }
+
+  @Test
+  void decodeVersionResponseOk() {
+    assertThat(ProtocolDecoder.decodeVersionResponse("OK version=7")).isEqualTo(7);
+  }
+
+  @Test
+  void decodeSnapshotResponseOk() {
+    assertThat(
+            ProtocolDecoder.decodeSnapshotResponse("OK snapshot={\"version\":1,\"payload\":\"x\"}"))
+        .isEqualTo("{\"version\":1,\"payload\":\"x\"}");
+    assertThat(ProtocolDecoder.decodeSnapshotResponse("OK snapshot=null")).isNull();
+  }
+
+  @Test
+  void strictResponseDecodersRejectLegacyValues() {
+    assertThatThrownBy(() -> ProtocolDecoder.decodeOffsetResponse("42"))
+        .hasMessageContaining("Unexpected offset response");
+    assertThatThrownBy(() -> ProtocolDecoder.decodeVersionResponse("7"))
+        .hasMessageContaining("Unexpected version response");
+    assertThatThrownBy(() -> ProtocolDecoder.decodeSnapshotResponse("NULL"))
+        .hasMessageContaining("Unexpected snapshot response");
+    assertThatThrownBy(
+            () -> ProtocolDecoder.decodeSnapshotResponse("{\"version\":1,\"payload\":\"x\"}"))
+        .hasMessageContaining("Unexpected snapshot response");
   }
 }
