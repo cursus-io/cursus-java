@@ -15,7 +15,9 @@ jobs:
   release:
     name: Release
     runs-on: ubuntu-latest
-    environment: maven-central
+    environment:
+      name: maven-central
+      url: https://central.sonatype.com/artifact/io.cursus/cursus-client/${{ inputs.version }}
 
     steps:
       - uses: actions/checkout@v7
@@ -71,3 +73,27 @@ jobs:
           tag_name: v${{ inputs.version }}
           name: v${{ inputs.version }}
           generate_release_notes: true
+          files: |
+            cursus-client/build/libs/*.jar
+            cursus-spring-boot-starter/build/libs/*.jar
+          body: |
+            ## Gradle
+
+            ```gradle
+            implementation "io.cursus:cursus-client:${{ inputs.version }}"
+            ```
+
+            ## Maven
+
+            ```xml
+            <dependency>
+              <groupId>io.cursus</groupId>
+              <artifactId>cursus-client</artifactId>
+              <version>${{ inputs.version }}</version>
+            </dependency>
+            ```
+
+            ## Packages
+
+            - Maven Central: https://central.sonatype.com/artifact/io.cursus/cursus-client/${{ inputs.version }}
+            - Spring Boot starter: `io.cursus:cursus-spring-boot-starter:${{ inputs.version }}`
