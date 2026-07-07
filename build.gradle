@@ -70,8 +70,8 @@ subprojects {
                         ? 'https://central.sonatype.com/repository/maven-snapshots/'
                         : 'https://ossrh-staging-api.central.sonatype.com/service/local/staging/deploy/maven2/'
                 credentials {
-                    username = findProperty('centralUsername') ?: findProperty('ossrhUsername') ?: System.getenv('CENTRAL_USERNAME') ?: System.getenv('OSSRH_USERNAME') ?: ''
-                    password = findProperty('centralPassword') ?: findProperty('ossrhPassword') ?: System.getenv('CENTRAL_PASSWORD') ?: System.getenv('OSSRH_PASSWORD') ?: ''
+                    username = System.getenv('OSSRH_USERNAME') ?: ''
+                    password = System.getenv('OSSRH_PASSWORD') ?: ''
                 }
             }
         }
