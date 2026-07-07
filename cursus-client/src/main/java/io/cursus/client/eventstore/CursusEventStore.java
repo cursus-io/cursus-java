@@ -94,8 +94,11 @@ public class CursusEventStore implements AutoCloseable {
       String resp =
           sendCommand(
               "CREATE topic=" + topic + " partitions=" + partitions + " event_sourcing=true");
-      if (resp.startsWith("ERROR")) {
+      if (resp.startsWith("ERROR:")) {
         throw new CursusException("createTopic: " + resp);
+      }
+      if (!resp.startsWith("OK")) {
+        throw new CursusException("createTopic: unexpected response: " + resp);
       }
       log.info("EventStore topic '{}' created with {} partitions", topic, partitions);
     } catch (CursusException e) {
@@ -128,7 +131,7 @@ public class CursusEventStore implements AutoCloseable {
       cmd.append(" message=").append(event.getPayload());
 
       String resp = sendCommand(cmd.toString());
-      if (resp.startsWith("ERROR")) {
+      if (resp.startsWith("ERROR:")) {
         throw new CursusException("append: " + resp);
       }
       return parseAppendResponse(resp);
@@ -141,8 +144,12 @@ public class CursusEventStore implements AutoCloseable {
   }
 
   private AppendResult parseAppendResponse(String resp) {
-    long version = 0, offset = 0;
-    int partition = 0;
+    if (!resp.startsWith("OK")) {
+      throw new CursusException("append: unexpected response: " + resp);
+    }
+    Long version = null;
+    Long offset = null;
+    Integer partition = null;
     for (String part : resp.split("\\s+")) {
       String[] kv = part.split("=", 2);
       if (kv.length != 2) continue;
@@ -152,6 +159,9 @@ public class CursusEventStore implements AutoCloseable {
         case "partition" -> partition = Integer.parseInt(kv[1]);
         default -> {}
       }
+    }
+    if (version == null || offset == null || partition == null) {
+      throw new CursusException("append: missing fields in response: " + resp);
     }
     return new AppendResult(version, offset, partition);
   }
@@ -183,6 +193,14 @@ public class CursusEventStore implements AutoCloseable {
       // Frame 1: JSON envelope
       byte[] envData = readFrame();
       JsonNode envelope = MAPPER.readTree(envData);
+      String status = envelope.path("status").asText();
+      if ("ERROR".equals(status)) {
+        throw new CursusException(
+            "readStream: " + envelope.path("error").asText("read stream failed"));
+      }
+      if (!"OK".equals(status)) {
+        throw new CursusException("readStream: unexpected status: " + status);
+      }
 
       Snapshot snapshot = null;
       JsonNode snapNode = envelope.get("snapshot");
@@ -223,8 +241,11 @@ public class CursusEventStore implements AutoCloseable {
                   + version
                   + " message="
                   + payload);
-      if (resp.startsWith("ERROR")) {
+      if (resp.startsWith("ERROR:")) {
         throw new CursusException("saveSnapshot: " + resp);
+      }
+      if (!resp.startsWith("OK")) {
+        throw new CursusException("saveSnapshot: unexpected response: " + resp);
       }
     } catch (CursusException e) {
       throw e;
@@ -237,11 +258,9 @@ public class CursusEventStore implements AutoCloseable {
   public Snapshot readSnapshot(String key) {
     try {
       String resp = sendCommand("READ_SNAPSHOT topic=" + topic + " key=" + key);
-      if ("NULL".equals(resp) || resp.contains("NOT_FOUND")) return null;
-      if (resp.startsWith("ERROR")) {
-        throw new CursusException("readSnapshot: " + resp);
-      }
-      JsonNode obj = MAPPER.readTree(resp);
+      String snapshotJson = ProtocolDecoder.decodeSnapshotResponse(resp);
+      if (snapshotJson == null) return null;
+      JsonNode obj = MAPPER.readTree(snapshotJson);
       return new Snapshot(obj.get("version").asLong(), obj.get("payload").asText());
     } catch (CursusException e) {
       throw e;
@@ -254,7 +273,9 @@ public class CursusEventStore implements AutoCloseable {
   public long streamVersion(String key) {
     try {
       String resp = sendCommand("STREAM_VERSION topic=" + topic + " key=" + key);
-      return Long.parseLong(resp.trim());
+      return ProtocolDecoder.decodeVersionResponse(resp);
+    } catch (CursusException e) {
+      throw e;
     } catch (NumberFormatException e) {
       throw new CursusException("streamVersion: invalid response");
     } catch (Exception e) {
