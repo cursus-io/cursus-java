@@ -40,6 +40,8 @@ jobs:
         env:
           CENTRAL_USERNAME: ${{ secrets.CENTRAL_USERNAME }}
           CENTRAL_PASSWORD: ${{ secrets.CENTRAL_PASSWORD }}
+          OSSRH_USERNAME: ${{ secrets.OSSRH_USERNAME }}
+          OSSRH_PASSWORD: ${{ secrets.OSSRH_PASSWORD }}
           GPG_PRIVATE_KEY: ${{ secrets.GPG_PRIVATE_KEY }}
           GPG_PASSPHRASE: ${{ secrets.GPG_PASSPHRASE }}
 
@@ -48,8 +50,12 @@ jobs:
         env:
           CENTRAL_USERNAME: ${{ secrets.CENTRAL_USERNAME }}
           CENTRAL_PASSWORD: ${{ secrets.CENTRAL_PASSWORD }}
+          OSSRH_USERNAME: ${{ secrets.OSSRH_USERNAME }}
+          OSSRH_PASSWORD: ${{ secrets.OSSRH_PASSWORD }}
         run: |
-          token=$(printf "%s:%s" "$CENTRAL_USERNAME" "$CENTRAL_PASSWORD" | base64 -w0)
+          username="${CENTRAL_USERNAME:-$OSSRH_USERNAME}"
+          password="${CENTRAL_PASSWORD:-$OSSRH_PASSWORD}"
+          token=$(printf "%s:%s" "$username" "$password" | base64 -w0)
           curl --fail --request POST \
             --header "Authorization: Bearer $token" \
             "https://ossrh-staging-api.central.sonatype.com/manual/upload/defaultRepository/io.cursus?publishing_type=automatic"
