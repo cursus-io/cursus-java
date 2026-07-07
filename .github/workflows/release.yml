@@ -10,12 +10,12 @@ on:
 
 permissions:
   contents: write
-  packages: write
 
 jobs:
   release:
     name: Release
     runs-on: ubuntu-latest
+    environment: maven-central
 
     steps:
       - uses: actions/checkout@v7
@@ -35,20 +35,31 @@ jobs:
       - name: Build
         run: ./gradlew build
 
-      - name: Publish to Maven Central
-        run: ./gradlew publish
+      - name: Publish artifacts to Central Portal staging API
+        run: ./gradlew :cursus-client:publish :cursus-spring-boot-starter:publish
         env:
-          OSSRH_USERNAME: ${{ secrets.OSSRH_USERNAME }}
-          OSSRH_PASSWORD: ${{ secrets.OSSRH_PASSWORD }}
+          CENTRAL_USERNAME: ${{ secrets.CENTRAL_USERNAME }}
+          CENTRAL_PASSWORD: ${{ secrets.CENTRAL_PASSWORD }}
           GPG_PRIVATE_KEY: ${{ secrets.GPG_PRIVATE_KEY }}
           GPG_PASSPHRASE: ${{ secrets.GPG_PASSPHRASE }}
 
-      - name: Create Git Tag
+      - name: Upload deployment to Central Portal
+        shell: bash
+        env:
+          CENTRAL_USERNAME: ${{ secrets.CENTRAL_USERNAME }}
+          CENTRAL_PASSWORD: ${{ secrets.CENTRAL_PASSWORD }}
+        run: |
+          token=$(printf "%s:%s" "$CENTRAL_USERNAME" "$CENTRAL_PASSWORD" | base64 -w0)
+          curl --fail --request POST \
+            --header "Authorization: Bearer $token" \
+            "https://ossrh-staging-api.central.sonatype.com/manual/upload/defaultRepository/io.cursus?publishing_type=automatic"
+
+      - name: Create Git tag
         run: |
           git tag "v${{ inputs.version }}"
           git push origin "v${{ inputs.version }}"
 
-      - name: Create GitHub Release
+      - name: Create GitHub release
         uses: softprops/action-gh-release@v3
         with:
           tag_name: v${{ inputs.version }}
