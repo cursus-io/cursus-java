@@ -71,16 +71,44 @@ jobs:
         uses: softprops/action-gh-release@v3
         with:
           tag_name: v${{ inputs.version }}
-          name: v${{ inputs.version }}
+          name: Cursus Java Client v${{ inputs.version }}
           generate_release_notes: true
           files: |
             cursus-client/build/libs/*.jar
             cursus-spring-boot-starter/build/libs/*.jar
           body: |
+            Cursus Java Client v${{ inputs.version }} is the Java SDK release for the Cursus message broker, including the core client and Spring Boot starter.
+
+            ## Highlights
+
+            - Core Java client module: `io.cursus:cursus-client`.
+            - Spring Boot starter module: `io.cursus:cursus-spring-boot-starter`.
+            - Producer support with partition batching, gzip compression, idempotent delivery, and configurable linger time.
+            - Consumer support for polling, streaming, consumer groups, heartbeats, offset commits, and rebalance handling.
+            - EventStore support for event sourcing with optimistic concurrency and snapshots.
+            - Spring Boot auto-configuration and `@CursusListener` for listener-style consumers.
+            - Java 21 virtual-thread support with Java 17-compatible fallback execution.
+            - Strict protocol response parsing aligned with the normalized Cursus broker contract.
+
+            ## Requirements
+
+            - Java 17 or later. Java 21 or later is recommended for virtual-thread execution.
+            - A running Cursus broker, usually on `localhost:9000` for local development.
+
             ## Gradle
 
             ```gradle
-            implementation "io.cursus:cursus-client:${{ inputs.version }}"
+            dependencies {
+                implementation "io.cursus:cursus-client:${{ inputs.version }}"
+            }
+            ```
+
+            Spring Boot starter:
+
+            ```gradle
+            dependencies {
+                implementation "io.cursus:cursus-spring-boot-starter:${{ inputs.version }}"
+            }
             ```
 
             ## Maven
@@ -93,7 +121,38 @@ jobs:
             </dependency>
             ```
 
-            ## Packages
+            Spring Boot starter:
 
-            - Maven Central: https://central.sonatype.com/artifact/io.cursus/cursus-client/${{ inputs.version }}
-            - Spring Boot starter: `io.cursus:cursus-spring-boot-starter:${{ inputs.version }}`
+            ```xml
+            <dependency>
+              <groupId>io.cursus</groupId>
+              <artifactId>cursus-spring-boot-starter</artifactId>
+              <version>${{ inputs.version }}</version>
+            </dependency>
+            ```
+
+            ## Quick Start
+
+            ```java
+            CursusProducerConfig config = CursusProducerConfig.builder()
+                    .brokers(List.of("localhost:9000"))
+                    .topic("my-topic")
+                    .partitions(4)
+                    .acks(Acks.ONE)
+                    .build();
+
+            try (CursusProducer producer = new CursusProducer(config)) {
+                producer.send("Hello, Cursus!");
+                producer.flush();
+            }
+            ```
+
+            ## Package Links
+
+            - Maven Central core client: https://central.sonatype.com/artifact/io.cursus/cursus-client/${{ inputs.version }}
+            - Maven Central Spring Boot starter: https://central.sonatype.com/artifact/io.cursus/cursus-spring-boot-starter/${{ inputs.version }}
+            - GitHub: https://github.com/cursus-io/cursus-java
+
+            ## Assets
+
+            The release assets include the built JARs for the core client and Spring Boot starter. Maven Central remains the recommended installation path.
