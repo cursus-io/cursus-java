@@ -121,6 +121,14 @@ public class ConnectionManager implements AutoCloseable {
     return sendOnPartition(partitionId, command.getBytes(StandardCharsets.UTF_8));
   }
 
+  public void sendCommandOnPartitionOneWay(int partitionId, String command) {
+    if (closed) {
+      throw new CursusConnectionException("ConnectionManager is closed");
+    }
+    ManagedConnection conn = getPartitionConnection(partitionId);
+    conn.channel.writeAndFlush(Unpooled.wrappedBuffer(command.getBytes(StandardCharsets.UTF_8)));
+  }
+
   /** Returns the handler for a partition connection, allowing push-mode setup for streaming. */
   public CursusClientHandler getPartitionHandler(int partitionId) {
     ManagedConnection conn = partitionConnections.get(partitionId);

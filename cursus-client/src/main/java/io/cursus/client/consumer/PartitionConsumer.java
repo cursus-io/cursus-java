@@ -78,7 +78,11 @@ public class PartitionConsumer {
     running.set(true);
     try {
       // Create a dedicated per-partition connection
-      connectionManager.connectPartition(partitionId);
+      if (partitionLeaderAddr != null && !partitionLeaderAddr.isEmpty()) {
+        connectionManager.connectPartitionToAddress(partitionId, partitionLeaderAddr);
+      } else {
+        connectionManager.connectPartition(partitionId);
+      }
 
       // Fetch committed offset for this partition
       long startOffset = fetchOffset();
@@ -257,11 +261,7 @@ public class PartitionConsumer {
       String command =
           CommandBuilder.stream(
               config.getTopic(), partitionId, group, currentOffset.get(), generation, member);
-      if (coordinatorAddr != null) {
-        connectionManager.sendToAddress(coordinatorAddr, command);
-      } else {
-        connectionManager.sendCommandOnPartition(partitionId, command);
-      }
+      connectionManager.sendCommandOnPartitionOneWay(partitionId, command);
 
       while (running.get()) {
         try {
@@ -273,6 +273,37 @@ public class PartitionConsumer {
           }
 
           String response = new String(responseBytes, StandardCharsets.UTF_8);
+          if (response.contains("NOT_LEADER LEADER_IS")) {
+            String[] parts = response.split("\\s+");
+            for (int i = 0; i < parts.length; i++) {
+              if ("LEADER_IS".equals(parts[i]) && i + 1 < parts.length) {
+                partitionLeaderAddr = parts[i + 1];
+                break;
+              }
+            }
+            partitionHandler.setPushHandler(null);
+            connectionManager.connectPartitionToAddress(partitionId, partitionLeaderAddr);
+            partitionHandler = connectionManager.getPartitionHandler(partitionId);
+            if (partitionHandler == null) {
+              log.error("No handler found for partition {} after leader update", partitionId);
+              return;
+            }
+            partitionHandler.setPushHandler(pushQueue::add);
+            String restream =
+                CommandBuilder.stream(
+                    config.getTopic(), partitionId, group, currentOffset.get(), generation, member);
+            connectionManager.sendCommandOnPartitionOneWay(partitionId, restream);
+            continue;
+          }
+          if (ProtocolDecoder.isErrorResponse(response)) {
+            log.warn("Partition {} stream broker error: {}", partitionId, response);
+            Thread.sleep(backoff.nextBackoff().toMillis());
+            String restream =
+                CommandBuilder.stream(
+                    config.getTopic(), partitionId, group, currentOffset.get(), generation, member);
+            connectionManager.sendCommandOnPartitionOneWay(partitionId, restream);
+            continue;
+          }
           if (ProtocolDecoder.isRebalanceRequired(response)) {
             log.info("Rebalance required for partition {} in streaming mode", partitionId);
             rebalanceRequired.set(true);
@@ -297,7 +328,7 @@ public class PartitionConsumer {
             String restream =
                 CommandBuilder.stream(
                     config.getTopic(), partitionId, group, currentOffset.get(), generation, member);
-            connectionManager.sendCommandOnPartition(partitionId, restream);
+            connectionManager.sendCommandOnPartitionOneWay(partitionId, restream);
           } catch (InterruptedException ie) {
             Thread.currentThread().interrupt();
             return;
