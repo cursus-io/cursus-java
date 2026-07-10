@@ -190,7 +190,7 @@ public class MyEventHandler {
 
 | Example | Description |
 |---|---|
-| [standalone/](cursus-examples/standalone/) | 5 standalone Java examples (no Spring) |
+| [standalone/](cursus-examples/standalone/) | 6 standalone Java examples (no Spring) |
 | [spring-boot/](cursus-examples/spring-boot/) | Spring Boot REST app with producer and listener |
 
 See each directory's README for run instructions.
