@@ -9,7 +9,7 @@ Add the starter dependency:
 ```groovy
 // build.gradle
 dependencies {
-    implementation 'io.cursus:cursus-spring-boot-starter:0.1.0-SNAPSHOT'
+    implementation 'io.cursus:cursus-spring-boot-starter:0.1.0'
     implementation 'org.springframework.boot:spring-boot-starter-web'
 }
 ```

@@ -339,7 +339,9 @@ public class PartitionConsumer {
       }
     } finally {
       // Clear push handler when done
-      partitionHandler.setPushHandler(null);
+      if (partitionHandler != null) {
+        partitionHandler.setPushHandler(null);
+      }
     }
   }
 

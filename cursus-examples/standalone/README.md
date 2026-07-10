@@ -22,6 +22,7 @@ docker run -d --name cursus -p 9000:9000 cursusio/cursus:latest
 | `BatchProducer` | Send 10,000 messages with batching (size 500) and gzip compression |
 | `KeyedProducer` | Send messages with routing keys so related messages land on the same partition |
 | `ConsumerGroupExample` | Join a consumer group in polling mode; use multiple terminals to see partition assignment in action |
+| `EventSourcingExample` | Append/read event streams, read stream version, save snapshots, and observe version conflicts |
 
 ## Running the Examples
 
@@ -61,6 +62,17 @@ Run each example with the Gradle `run` task from the repository root. Replace `<
 ./gradlew :cursus-examples:standalone:run \
   -PmainClass=io.cursus.examples.standalone.ConsumerGroupExample
 ```
+
+**EventSourcingExample** — appends two events to an order stream, reads the stream version, saves a snapshot, and shows the expected version-conflict response:
+
+```bash
+./gradlew :cursus-examples:standalone:run \
+  -PmainClass=io.cursus.examples.standalone.EventSourcingExample
+```
+
+Cluster examples use the same APIs. Pass all bootstrap brokers, for example
+`List.of("localhost:9001", "localhost:9002", "localhost:9003")`, instead of a
+single `localhost:9000` address.
 
 ## Typical Workflow
 

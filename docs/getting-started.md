@@ -20,8 +20,18 @@ repositories {
 }
 
 dependencies {
-    implementation 'io.cursus:cursus-client:0.1.0-SNAPSHOT'
+    implementation 'io.cursus:cursus-client:0.1.0'
 }
+```
+
+Maven users can add the same artifact:
+
+```xml
+<dependency>
+  <groupId>io.cursus</groupId>
+  <artifactId>cursus-client</artifactId>
+  <version>0.1.0</version>
+</dependency>
 ```
 
 **Spring Boot application**
@@ -33,7 +43,7 @@ repositories {
 }
 
 dependencies {
-    implementation 'io.cursus:cursus-spring-boot-starter:0.1.0-SNAPSHOT'
+    implementation 'io.cursus:cursus-spring-boot-starter:0.1.0'
     implementation 'org.springframework.boot:spring-boot-starter-web'
 }
 ```
@@ -131,6 +141,52 @@ Run it in a second terminal while the producer is running:
 
 ```bash
 ./gradlew :cursus-examples:standalone:run --main-class io.cursus.examples.standalone.SimpleConsumer
+```
+
+## Event sourcing
+
+`CursusEventStore` stores append-only streams by aggregate key. `expectedVersion` is the next version you expect to append; the broker rejects stale writes with a version conflict.
+
+```java
+import io.cursus.client.eventstore.*;
+import java.util.List;
+
+try (CursusEventStore store = new CursusEventStore(
+        List.of("localhost:9000"), "orders-es", "orders")) {
+    store.createTopic(4);
+
+    store.append(
+            "order-1001",
+            1,
+            Event.builder()
+                    .type("OrderCreated")
+                    .payload("{\"item\":\"widget\"}")
+                    .build());
+
+    StreamData stream = store.readStream("order-1001");
+    System.out.println(stream.getEvents().get(0).getType());
+}
+```
+
+## Cluster brokers
+
+Pass every bootstrap broker address. The client uses those addresses to connect and follows broker redirects when the current connection is not the partition leader.
+
+```java
+List<String> brokers = List.of("localhost:9001", "localhost:9002", "localhost:9003");
+
+CursusProducerConfig producerConfig = CursusProducerConfig.builder()
+        .brokers(brokers)
+        .topic("hello-topic")
+        .build();
+
+CursusConsumerConfig consumerConfig = CursusConsumerConfig.builder()
+        .brokers(brokers)
+        .topic("hello-topic")
+        .groupId("hello-group")
+        .build();
+
+CursusEventStore events = new CursusEventStore(brokers, "orders-es", "orders");
 ```
 
 ## Quick Start Flow
