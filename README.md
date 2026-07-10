@@ -24,8 +24,26 @@ Java client library for the [Cursus](https://github.com/cursus-io/cursus) messag
 ```groovy
 // build.gradle
 dependencies {
-    implementation 'io.cursus:cursus-client:0.1.0-SNAPSHOT'
+    implementation 'io.cursus:cursus-client:0.1.0'
 }
+```
+
+Maven:
+
+```xml
+<dependency>
+  <groupId>io.cursus</groupId>
+  <artifactId>cursus-client</artifactId>
+  <version>0.1.0</version>
+</dependency>
+```
+
+Verify the dependency resolves and the public API imports:
+
+```java
+import io.cursus.client.producer.CursusProducer;
+import io.cursus.client.consumer.CursusConsumer;
+import io.cursus.client.eventstore.CursusEventStore;
 ```
 
 **With Spring Boot**
@@ -33,7 +51,7 @@ dependencies {
 ```groovy
 // build.gradle
 dependencies {
-    implementation 'io.cursus:cursus-spring-boot-starter:0.1.0-SNAPSHOT'
+    implementation 'io.cursus:cursus-spring-boot-starter:0.1.0'
     implementation 'org.springframework.boot:spring-boot-starter-web'
 }
 ```
@@ -82,6 +100,43 @@ Runtime.getRuntime().addShutdownHook(new Thread(consumer::close));
 consumer.start(msg ->
         System.out.printf("offset=%d key=%s payload=%s%n",
                 msg.getOffset(), msg.getKey(), msg.getPayload()));
+```
+
+### Event sourcing
+
+```java
+import io.cursus.client.eventstore.*;
+import java.util.List;
+
+try (CursusEventStore store = new CursusEventStore(
+        List.of("localhost:9000"), "orders-es", "orders")) {
+    store.createTopic(4);
+
+    AppendResult result = store.append(
+            "order-1001",
+            1,
+            Event.builder()
+                    .type("OrderCreated")
+                    .payload("{\"item\":\"widget\"}")
+                    .build());
+
+    StreamData stream = store.readStream("order-1001");
+    System.out.println("version=" + result.getVersion()
+            + " events=" + stream.getEvents().size());
+}
+```
+
+For a cluster, pass all bootstrap broker addresses. Producers, consumers, and the event store follow broker redirects when a partition leader is elsewhere:
+
+```java
+List<String> brokers = List.of("localhost:9001", "localhost:9002", "localhost:9003");
+
+CursusProducerConfig producerConfig = CursusProducerConfig.builder()
+        .brokers(brokers)
+        .topic("my-topic")
+        .build();
+
+CursusEventStore events = new CursusEventStore(brokers, "orders-es", "orders");
 ```
 
 ### Spring Boot — application.yml + @CursusListener

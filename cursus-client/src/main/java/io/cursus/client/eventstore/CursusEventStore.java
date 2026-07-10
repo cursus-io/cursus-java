@@ -20,13 +20,22 @@ public class CursusEventStore implements AutoCloseable {
   private static final Logger log = LoggerFactory.getLogger(CursusEventStore.class);
   private static final ObjectMapper MAPPER = new ObjectMapper();
 
-  private final String addr;
+  private final List<String> addrs;
+  private String addr;
   private final String topic;
   private final String producerId;
   private Socket socket;
 
   public CursusEventStore(String addr, String topic, String producerId) {
-    this.addr = addr;
+    this(List.of(addr), topic, producerId);
+  }
+
+  public CursusEventStore(List<String> addrs, String topic, String producerId) {
+    if (addrs == null || addrs.isEmpty()) {
+      throw new IllegalArgumentException("at least one broker address is required");
+    }
+    this.addrs = List.copyOf(addrs);
+    this.addr = this.addrs.get(0);
     this.topic = topic;
     this.producerId = producerId;
   }
@@ -49,7 +58,14 @@ public class CursusEventStore implements AutoCloseable {
     }
   }
 
-  private String sendCommand(String command) throws Exception {
+  private void switchAddr(String newAddr) {
+    if (newAddr != null && !newAddr.isEmpty()) {
+      addr = newAddr;
+    }
+    resetSocket();
+  }
+
+  private String sendCommandOnce(String command) throws Exception {
     Socket s = getSocket();
     OutputStream out = s.getOutputStream();
     InputStream in = s.getInputStream();
@@ -67,20 +83,47 @@ public class CursusEventStore implements AutoCloseable {
     out.write(frame);
     out.flush();
 
-    byte[] lenBuf = in.readNBytes(4);
-    int respLen =
-        ((lenBuf[0] & 0xFF) << 24)
-            | ((lenBuf[1] & 0xFF) << 16)
-            | ((lenBuf[2] & 0xFF) << 8)
-            | (lenBuf[3] & 0xFF);
-    byte[] resp = in.readNBytes(respLen);
+    byte[] resp = readFrameFrom(in);
     return new String(resp, StandardCharsets.UTF_8);
   }
 
+  private String sendCommand(String command) throws Exception {
+    return sendCommand(command, 6, true);
+  }
+
+  private String sendCommand(String command, int retries, boolean retryTopicErrors)
+      throws Exception {
+    String last = "";
+    for (int attempt = 0; attempt <= retries; attempt++) {
+      String resp = sendCommandOnce(command);
+      last = resp;
+      String leader = leaderFromError(resp);
+      if (leader != null && attempt < retries) {
+        switchAddr(leader);
+        continue;
+      }
+      if (retryTopicErrors
+          && resp.startsWith("ERROR:")
+          && isRetryableTopicError(resp)
+          && attempt < retries) {
+        resetSocket();
+        Thread.sleep(Math.min(50L * (attempt + 1), 500L));
+        continue;
+      }
+      return resp;
+    }
+    return last;
+  }
+
   private byte[] readFrame() throws Exception {
-    Socket s = getSocket();
-    InputStream in = s.getInputStream();
+    return readFrameFrom(getSocket().getInputStream());
+  }
+
+  private byte[] readFrameFrom(InputStream in) throws Exception {
     byte[] lenBuf = in.readNBytes(4);
+    if (lenBuf.length != 4) {
+      throw new CursusConnectionException("Connection closed while reading frame length");
+    }
     int respLen =
         ((lenBuf[0] & 0xFF) << 24)
             | ((lenBuf[1] & 0xFF) << 16)
@@ -89,11 +132,30 @@ public class CursusEventStore implements AutoCloseable {
     return in.readNBytes(respLen);
   }
 
+  private static String leaderFromError(String resp) {
+    if (resp == null) return null;
+    String marker = "NOT_LEADER LEADER_IS";
+    int idx = resp.indexOf(marker);
+    if (idx < 0) return null;
+    String rest = resp.substring(idx + marker.length()).trim();
+    if (rest.isEmpty()) return null;
+    return rest.split("\\s+")[0];
+  }
+
+  private static boolean isRetryableTopicError(String resp) {
+    String text = resp == null ? "" : resp.toLowerCase();
+    return text.contains("topic_not_found")
+        || text.contains("no_raft_leader")
+        || text.contains("leader_not_available");
+  }
+
   public void createTopic(int partitions) {
     try {
       String resp =
           sendCommand(
-              "CREATE topic=" + topic + " partitions=" + partitions + " event_sourcing=true");
+              "CREATE topic=" + topic + " partitions=" + partitions + " event_sourcing=true",
+              6,
+              true);
       if (resp.startsWith("ERROR:")) {
         throw new CursusException("createTopic: " + resp);
       }
@@ -171,62 +233,86 @@ public class CursusEventStore implements AutoCloseable {
   }
 
   public StreamData readStream(String key, long fromVersion) {
-    try {
-      String cmd = "READ_STREAM topic=" + topic + " key=" + key;
-      if (fromVersion > 0) cmd += " from_version=" + fromVersion;
+    String cmd = "READ_STREAM topic=" + topic + " key=" + key;
+    if (fromVersion > 0) cmd += " from_version=" + fromVersion;
 
-      Socket s = getSocket();
-      OutputStream out = s.getOutputStream();
-
-      byte[] cmdBytes = cmd.getBytes(StandardCharsets.UTF_8);
-      byte[] payload = new byte[2 + cmdBytes.length];
-      System.arraycopy(cmdBytes, 0, payload, 2, cmdBytes.length);
-      byte[] frame = new byte[4 + payload.length];
-      frame[0] = (byte) (payload.length >> 24);
-      frame[1] = (byte) (payload.length >> 16);
-      frame[2] = (byte) (payload.length >> 8);
-      frame[3] = (byte) (payload.length);
-      System.arraycopy(payload, 0, frame, 4, payload.length);
-      out.write(frame);
-      out.flush();
-
-      // Frame 1: JSON envelope
-      byte[] envData = readFrame();
-      JsonNode envelope = MAPPER.readTree(envData);
-      String status = envelope.path("status").asText();
-      if ("ERROR".equals(status)) {
-        throw new CursusException(
-            "readStream: " + envelope.path("error").asText("read stream failed"));
-      }
-      if (!"OK".equals(status)) {
-        throw new CursusException("readStream: unexpected status: " + status);
-      }
-
-      Snapshot snapshot = null;
-      JsonNode snapNode = envelope.get("snapshot");
-      if (snapNode != null && !snapNode.isNull()) {
-        snapshot = new Snapshot(snapNode.get("version").asLong(), snapNode.get("payload").asText());
-      }
-
-      // Frame 2: Binary batch
-      byte[] batchData = readFrame();
-      List<StreamEvent> events = new ArrayList<>();
-      if (batchData.length > 0) {
-        List<CursusMessage> messages = ProtocolDecoder.decodeBatchMessages(batchData);
-        for (CursusMessage m : messages) {
-          events.add(
-              new StreamEvent(
-                  m.getAggregateVersion(), m.getOffset(),
-                  m.getEventType(), (int) m.getSchemaVersion(),
-                  m.getPayload(), m.getMetadata()));
+    String lastError = "read stream failed";
+    for (int attempt = 0; attempt <= 6; attempt++) {
+      try {
+        return readStreamOnce(cmd);
+      } catch (CursusException e) {
+        lastError = e.getMessage();
+        String leader = leaderFromError(lastError);
+        if (leader != null && attempt < 6) {
+          switchAddr(leader);
+          continue;
         }
+        if (isRetryableTopicError(lastError) && attempt < 6) {
+          resetSocket();
+          sleepBackoff(attempt);
+          continue;
+        }
+        throw e;
+      } catch (Exception e) {
+        resetSocket();
+        throw new CursusConnectionException("readStream failed", e);
       }
-
-      return new StreamData(snapshot, events);
-    } catch (Exception e) {
-      resetSocket();
-      throw new CursusConnectionException("readStream failed", e);
     }
+    throw new CursusException("readStream: " + lastError);
+  }
+
+  private StreamData readStreamOnce(String cmd) throws Exception {
+    Socket s = getSocket();
+    OutputStream out = s.getOutputStream();
+
+    byte[] cmdBytes = cmd.getBytes(StandardCharsets.UTF_8);
+    byte[] payload = new byte[2 + cmdBytes.length];
+    System.arraycopy(cmdBytes, 0, payload, 2, cmdBytes.length);
+    byte[] frame = new byte[4 + payload.length];
+    frame[0] = (byte) (payload.length >> 24);
+    frame[1] = (byte) (payload.length >> 16);
+    frame[2] = (byte) (payload.length >> 8);
+    frame[3] = (byte) (payload.length);
+    System.arraycopy(payload, 0, frame, 4, payload.length);
+    out.write(frame);
+    out.flush();
+
+    byte[] envData = readFrame();
+    JsonNode envelope;
+    try {
+      envelope = MAPPER.readTree(envData);
+    } catch (Exception e) {
+      throw new CursusException("readStream: " + new String(envData, StandardCharsets.UTF_8), e);
+    }
+    String status = envelope.path("status").asText();
+    if ("ERROR".equals(status)) {
+      throw new CursusException(
+          "readStream: " + envelope.path("error").asText("read stream failed"));
+    }
+    if (!"OK".equals(status)) {
+      throw new CursusException("readStream: unexpected status: " + status);
+    }
+
+    Snapshot snapshot = null;
+    JsonNode snapNode = envelope.get("snapshot");
+    if (snapNode != null && !snapNode.isNull()) {
+      snapshot = new Snapshot(snapNode.get("version").asLong(), snapNode.get("payload").asText());
+    }
+
+    byte[] batchData = readFrame();
+    List<StreamEvent> events = new ArrayList<>();
+    if (batchData.length > 0) {
+      List<CursusMessage> messages = ProtocolDecoder.decodeBatchMessages(batchData);
+      for (CursusMessage m : messages) {
+        events.add(
+            new StreamEvent(
+                m.getAggregateVersion(), m.getOffset(),
+                m.getEventType(), (int) m.getSchemaVersion(),
+                m.getPayload(), m.getMetadata()));
+      }
+    }
+
+    return new StreamData(snapshot, events);
   }
 
   public void saveSnapshot(String key, long version, String payload) {
@@ -281,6 +367,15 @@ public class CursusEventStore implements AutoCloseable {
     } catch (Exception e) {
       resetSocket();
       throw new CursusConnectionException("streamVersion failed", e);
+    }
+  }
+
+  private static void sleepBackoff(int attempt) {
+    try {
+      Thread.sleep(Math.min(50L * (attempt + 1), 500L));
+    } catch (InterruptedException e) {
+      Thread.currentThread().interrupt();
+      throw new CursusConnectionException("Interrupted during event store retry", e);
     }
   }
 
