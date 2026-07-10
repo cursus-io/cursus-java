@@ -210,4 +210,4 @@ flowchart TB
 - [Consumer Guide](consumer-guide.md) — modes, consumer groups, offset management, shutdown
 - [Spring Boot Integration](spring-boot-integration.md) — auto-configuration and `@CursusListener`
 - [Configuration Reference](configuration-reference.md) — all properties with types and defaults
-- [Examples](../cursus-examples/standalone/README.md) — five ready-to-run standalone examples
+- [Examples](../cursus-examples/standalone/README.md) — six ready-to-run standalone examples
