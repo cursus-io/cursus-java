@@ -74,11 +74,18 @@ subprojects {
                     password = System.getenv('OSSRH_PASSWORD') ?: ''
                 }
             }
+            maven {
+                name = 'CentralBundle'
+                url = rootProject.layout.buildDirectory.dir('central-staging')
+            }
         }
     }
 
     signing {
-        required { !version.toString().endsWith('-SNAPSHOT') && gradle.taskGraph.hasTask('publish') }
+        required {
+            !version.toString().endsWith('-SNAPSHOT')
+                    && gradle.taskGraph.allTasks.any { it.name.toLowerCase().contains('publish') }
+        }
         def signingKey = findProperty('signing.key') ?: System.getenv('GPG_PRIVATE_KEY')
         def signingPassword = findProperty('signing.password') ?: System.getenv('GPG_PASSPHRASE')
         if (signingKey) {
