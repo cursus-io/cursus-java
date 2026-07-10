@@ -45,26 +45,32 @@ jobs:
       - name: Build
         run: ./gradlew build
 
-      - name: Publish artifacts to Central Portal staging API
-        run: ./gradlew :cursus-client:publish :cursus-spring-boot-starter:publish
+      - name: Stage signed artifacts for Central Portal
+        run: |
+          ./gradlew \
+            :cursus-client:publishMavenJavaPublicationToCentralBundleRepository \
+            :cursus-spring-boot-starter:publishMavenJavaPublicationToCentralBundleRepository
         env:
-          OSSRH_USERNAME: ${{ secrets.OSSRH_USERNAME }}
-          OSSRH_PASSWORD: ${{ secrets.OSSRH_PASSWORD }}
           GPG_PRIVATE_KEY: ${{ secrets.GPG_PRIVATE_KEY }}
           GPG_PASSPHRASE: ${{ secrets.GPG_PASSPHRASE }}
 
-      - name: Upload deployment to Central Portal
+      - name: Create Central Portal bundle
+        shell: bash
+        run: |
+          cd build/central-staging
+          zip -r ../central-bundle.zip .
+
+      - name: Upload bundle to Central Portal
         shell: bash
         env:
           OSSRH_USERNAME: ${{ secrets.OSSRH_USERNAME }}
           OSSRH_PASSWORD: ${{ secrets.OSSRH_PASSWORD }}
         run: |
-          username="$OSSRH_USERNAME"
-          password="$OSSRH_PASSWORD"
-          token=$(printf "%s:%s" "$username" "$password" | base64 -w0)
+          token=$(printf "%s:%s" "$OSSRH_USERNAME" "$OSSRH_PASSWORD" | base64 -w0)
           curl --fail --request POST \
             --header "Authorization: Bearer $token" \
-            "https://ossrh-staging-api.central.sonatype.com/manual/upload/defaultRepository/io.cursus?publishing_type=automatic"
+            --form bundle=@build/central-bundle.zip \
+            "https://central.sonatype.com/api/v1/publisher/upload?publishingType=AUTOMATIC&name=cursus-java-${{ inputs.version }}"
 
       - name: Create Git tag
         run: |
