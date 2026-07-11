@@ -318,11 +318,17 @@ public class PartitionConsumer {
             continue;
           }
           if (ProtocolDecoder.isStreamControlFrame(responseBytes)) {
-            handleStreamControl(ProtocolDecoder.decodeStreamControl(responseBytes));
-            String restream =
-                CommandBuilder.stream(
-                    config.getTopic(), partitionId, group, currentOffset.get(), generation, member);
-            connectionManager.sendCommandOnPartitionOneWay(partitionId, restream);
+            if (handleStreamControl(ProtocolDecoder.decodeStreamControl(responseBytes))) {
+              String restream =
+                  CommandBuilder.stream(
+                      config.getTopic(),
+                      partitionId,
+                      group,
+                      currentOffset.get(),
+                      generation,
+                      member);
+              connectionManager.sendCommandOnPartitionOneWay(partitionId, restream);
+            }
             continue;
           }
           if (ProtocolDecoder.isCoordinatorFailure(response)) {
@@ -453,7 +459,21 @@ public class PartitionConsumer {
             + range.latest());
   }
 
-  private void handleStreamControl(ProtocolDecoder.StreamControl control) {
+  static boolean shouldRestreamAfterStreamControl(ProtocolDecoder.StreamControl control) {
+    String reason = control.reason();
+    if ("offset_out_of_range".equals(reason)) {
+      return true;
+    }
+    if (!"CLOSE".equals(control.type())) {
+      return true;
+    }
+    if (reason == null || reason.isBlank()) {
+      return false;
+    }
+    return "timeout".equals(reason) || "error".equals(reason);
+  }
+
+  private boolean handleStreamControl(ProtocolDecoder.StreamControl control) {
     if ("offset_out_of_range".equals(control.reason())) {
       if (control.earliest() == null || control.latest() == null) {
         throw new CursusProtocolException("STREAM_CONTROL missing offset range: " + control);
@@ -464,11 +484,16 @@ public class PartitionConsumer {
                   (control.requested() != null ? control.requested() : currentOffset.get()),
                   control.earliest(),
                   control.latest())));
-      return;
+      return true;
     }
     if ("CLOSE".equals(control.type()) && control.offset() != null) {
       currentOffset.set(control.offset());
     }
+    boolean restream = shouldRestreamAfterStreamControl(control);
+    if (!restream) {
+      running.set(false);
+    }
+    return restream;
   }
 
   /** Commits the current offset for this partition using COMMIT_OFFSET on the leader connection. */
