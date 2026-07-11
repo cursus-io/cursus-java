@@ -158,6 +158,13 @@ class ProtocolDecoderTest {
         .isTrue();
     assertThat(ProtocolDecoder.isStaleProducerEpoch("ERROR: stale_producer_epoch producer=p1"))
         .isTrue();
+    assertThat(
+            ProtocolDecoder.isTerminalProducerError("ERROR: idempotency_gap expected=3 actual=5"))
+        .isTrue();
+    assertThat(
+            ProtocolDecoder.isTerminalProducerError(
+                "ERROR: first message for producer must use seqNum=1"))
+        .isTrue();
   }
 
   @Test

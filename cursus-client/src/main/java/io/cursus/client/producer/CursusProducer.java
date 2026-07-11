@@ -45,6 +45,8 @@ public class CursusProducer implements AutoCloseable {
   private final Set<CompletableFuture<Void>> inflightFutures = ConcurrentHashMap.newKeySet();
   private final AtomicLong batchIdGenerator = new AtomicLong(0);
   private final Map<Integer, String> partitionLeaders = new ConcurrentHashMap<>();
+  private final String producerId;
+  private final int producerEpoch;
   private CursusProducerMetrics metrics;
 
   private static final Pattern PARTITION_COUNT_PATTERN = Pattern.compile("partitions=(\\d+)");
@@ -55,6 +57,8 @@ public class CursusProducer implements AutoCloseable {
 
   public CursusProducer(CursusProducerConfig config, Object metricsRegistry) {
     this.config = config;
+    this.producerId = "java-" + UUID.randomUUID();
+    this.producerEpoch = (int) (System.currentTimeMillis() / 1000L);
     this.connectionManager =
         new ConnectionManager(
             config.getBrokers(), config.getTlsCertPath(),
@@ -86,7 +90,9 @@ public class CursusProducer implements AutoCloseable {
 
     this.partitionBuffers = new PartitionBuffer[verifiedPartitions];
     for (int i = 0; i < verifiedPartitions; i++) {
-      partitionBuffers[i] = new PartitionBuffer(i, config.getBatchSize(), config.getBufferSize());
+      partitionBuffers[i] =
+          new PartitionBuffer(
+              i, config.getBatchSize(), config.getBufferSize(), producerId, producerEpoch);
     }
 
     fetchMetadata();
@@ -361,11 +367,12 @@ public class CursusProducer implements AutoCloseable {
                   }
 
                   if (ack.hasError()) {
-                    if (ProtocolDecoder.isStaleProducerEpoch(ack)) {
+                    if (ProtocolDecoder.isTerminalProducerError(ack)) {
                       closed.set(true);
                       batchStates.remove(batchId);
                       if (metrics != null) metrics.recordFailure(messages.size());
-                      log.error("Producer fenced by stale producer epoch: {}", ack.getErrorMsg());
+                      log.error(
+                          "Producer fenced by terminal idempotency error: {}", ack.getErrorMsg());
                       return;
                     }
                     log.warn("Batch error: {}", ack.getErrorMsg());

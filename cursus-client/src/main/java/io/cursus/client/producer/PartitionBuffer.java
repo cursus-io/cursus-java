@@ -13,14 +13,23 @@ public class PartitionBuffer {
   private final int partitionId;
   private final int batchSize;
   private final int bufferCapacity;
+  private final String producerId;
+  private final int producerEpoch;
   private final AtomicLong seqNumGenerator = new AtomicLong(0);
   private final ReentrantLock lock = new ReentrantLock();
   private final List<CursusMessage> buffer;
 
   public PartitionBuffer(int partitionId, int batchSize, int bufferCapacity) {
+    this(partitionId, batchSize, bufferCapacity, "", 0);
+  }
+
+  public PartitionBuffer(
+      int partitionId, int batchSize, int bufferCapacity, String producerId, int producerEpoch) {
     this.partitionId = partitionId;
     this.batchSize = batchSize;
     this.bufferCapacity = bufferCapacity;
+    this.producerId = producerId == null ? "" : producerId;
+    this.producerEpoch = producerEpoch;
     this.buffer = new ArrayList<>(batchSize);
   }
 
@@ -28,11 +37,12 @@ public class PartitionBuffer {
     long seq = seqNumGenerator.incrementAndGet();
     CursusMessage msg =
         CursusMessage.builder()
+            .producerId(producerId)
             .seqNum(seq)
             .payload(payload)
             .key(key)
             .offset(0)
-            .epoch(0)
+            .epoch(producerEpoch)
             .eventType("")
             .schemaVersion(0)
             .aggregateVersion(0)

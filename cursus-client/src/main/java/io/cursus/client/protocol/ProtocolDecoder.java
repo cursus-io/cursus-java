@@ -148,12 +148,26 @@ public final class ProtocolDecoder {
             || response.contains("NOT_COORDINATOR"));
   }
 
+  public static boolean isTerminalProducerError(String response) {
+    if (response == null) return false;
+    String lower = response.toLowerCase();
+    return lower.contains("stale_producer_epoch")
+        || lower.contains("idempotency_gap")
+        || lower.contains("first message")
+        || lower.contains("seqnum=1")
+        || lower.contains("seq_num=1");
+  }
+
+  public static boolean isTerminalProducerError(AckResponse ack) {
+    return ack != null && isTerminalProducerError(ack.getErrorMsg());
+  }
+
   public static boolean isStaleProducerEpoch(String response) {
-    return response != null && response.contains("stale_producer_epoch");
+    return isTerminalProducerError(response);
   }
 
   public static boolean isStaleProducerEpoch(io.cursus.client.message.AckResponse ack) {
-    return ack != null && isStaleProducerEpoch(ack.getErrorMsg());
+    return isTerminalProducerError(ack);
   }
 
   public static boolean isOffsetRegression(String response) {
