@@ -152,9 +152,13 @@ public final class ProtocolDecoder {
     if (response == null) return false;
     String lower = response.toLowerCase();
     return lower.contains("stale_producer_epoch")
+        || lower.contains("stale producer epoch")
         || lower.contains("idempotency_gap")
+        || lower.contains("idempotency gap")
+        || lower.contains("idempotency error")
         || lower.contains("first message")
         || lower.contains("seqnum=1")
+        || lower.contains("seqnum 1")
         || lower.contains("seq_num=1");
   }
 
