@@ -152,6 +152,15 @@ public class CursusConsumer implements AutoCloseable {
     return running.get() && connectionManager.isConnected();
   }
 
+  void requestRebalance() {
+    rebalanceRequired.set(true);
+    stopPartitionConsumers();
+  }
+
+  boolean isRebalanceRequired() {
+    return rebalanceRequired.get();
+  }
+
   @Override
   public void close() {
     if (running.compareAndSet(true, false)) {
@@ -450,8 +459,7 @@ public class CursusConsumer implements AutoCloseable {
       if (ProtocolDecoder.isRebalanceRequired(result)
           || ProtocolDecoder.isCoordinatorFailure(result)) {
         log.info("Rebalance required via heartbeat: {}", result);
-        rebalanceRequired.set(true);
-        stopPartitionConsumers();
+        requestRebalance();
       }
     } catch (Exception e) {
       log.warn("Heartbeat failed: {}", e.getMessage());
@@ -496,8 +504,7 @@ public class CursusConsumer implements AutoCloseable {
         if (metrics != null) metrics.recordCommitFailure();
       } else if (ProtocolDecoder.isCoordinatorFailure(result)) {
         log.warn("Batch commit coordinator failure: {}", result);
-        rebalanceRequired.set(true);
-        stopPartitionConsumers();
+        requestRebalance();
         if (metrics != null) metrics.recordCommitFailure();
       } else {
         log.warn("Batch commit response: {}", result);
@@ -510,7 +517,7 @@ public class CursusConsumer implements AutoCloseable {
       // rebalance flag and be picked up by the top-level loop.
       partitionConsumers.values().forEach(PartitionConsumer::commitOffset);
       if (partitionConsumers.values().stream().anyMatch(PartitionConsumer::isRebalanceRequired)) {
-        rebalanceRequired.set(true);
+        requestRebalance();
       }
     }
   }
