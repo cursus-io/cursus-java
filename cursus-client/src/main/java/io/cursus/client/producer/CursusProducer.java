@@ -237,9 +237,9 @@ public class CursusProducer implements AutoCloseable {
     if (closed.get()) throw new CursusProducerClosedException();
 
     int partition =
-        (key != null)
-            ? FnvHash.partition(key, config.getPartitions())
-            : roundRobinCounter.getAndIncrement() % config.getPartitions();
+        key != null
+            ? selectPartition(key, 0, partitionBuffers.length)
+            : selectPartition(null, roundRobinCounter.getAndIncrement(), partitionBuffers.length);
 
     PartitionBuffer buffer = partitionBuffers[partition];
     long seqNum = buffer.add(payload, key);
@@ -249,6 +249,15 @@ public class CursusProducer implements AutoCloseable {
     if (!batch.isEmpty()) submitBatch(partition, batch);
 
     return seqNum;
+  }
+
+  static int selectPartition(String key, int roundRobinValue, int partitionCount) {
+    if (partitionCount <= 0) {
+      throw new IllegalArgumentException("partitionCount must be positive");
+    }
+    return key != null
+        ? FnvHash.partition(key, partitionCount)
+        : Math.floorMod(roundRobinValue, partitionCount);
   }
 
   public void flush() {
