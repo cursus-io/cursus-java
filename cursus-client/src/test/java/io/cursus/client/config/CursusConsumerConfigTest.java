@@ -13,6 +13,7 @@ class CursusConsumerConfigTest {
         CursusConsumerConfig.builder().topic("test-topic").groupId("test-group").build();
 
     assertThat(config.getConsumerMode()).isEqualTo(ConsumerMode.STREAMING);
+    assertThat(config.getAutoOffsetReset()).isEqualTo(AutoOffsetReset.EARLIEST);
     assertThat(config.getAutoCommitInterval()).isEqualTo(Duration.ofSeconds(5));
     assertThat(config.getMaxPollRecords()).isEqualTo(100);
     assertThat(config.getSessionTimeoutMs()).isEqualTo(30000);

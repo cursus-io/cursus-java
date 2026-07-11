@@ -7,6 +7,7 @@
 Build a `CursusConsumerConfig`, construct the consumer, and call `start()` with a message handler. `start()` blocks the calling thread and runs until `close()` is called (typically from a shutdown hook or another thread).
 
 ```java
+import io.cursus.client.config.AutoOffsetReset;
 import io.cursus.client.config.ConsumerMode;
 import io.cursus.client.config.CursusConsumerConfig;
 import io.cursus.client.consumer.CursusConsumer;
@@ -18,6 +19,7 @@ CursusConsumerConfig config = CursusConsumerConfig.builder()
         .topic("orders")
         .groupId("order-processors")
         .consumerMode(ConsumerMode.STREAMING)
+        .autoOffsetReset(AutoOffsetReset.EARLIEST)
         .build();
 
 CursusConsumer consumer = new CursusConsumer(config);
@@ -145,7 +147,7 @@ for (int i = 0; i < 2; i++) {
 
 ## Offset Management
 
-Offsets are committed automatically on a periodic schedule controlled by `autoCommitInterval` (default 5 seconds). Internally the commit scheduler calls `COMMIT topic groupId partition offset` for each active partition consumer.
+Offsets are tracked per `(topic, groupId, partition)`, and the broker committed offset is the source of truth for resume. After `JOIN_GROUP` / `SYNC_GROUP`, each partition consumer calls `FETCH_OFFSET` and starts `CONSUME` / `STREAM` from that broker-reported next offset. Offsets are committed automatically on a periodic schedule controlled by `autoCommitInterval` (default 5 seconds). Internally the commit scheduler sends `COMMIT_OFFSET` / `BATCH_COMMIT` with `lastProcessedOffset + 1`.
 
 ```mermaid
 sequenceDiagram
@@ -158,10 +160,11 @@ sequenceDiagram
     loop for each message
         PC->>H: handler.accept(msg)
         PC->>PC: currentOffset = msg.getOffset() + 1
+        Note over PC: commit value is lastProcessedOffset + 1
     end
 
     Note over CS: autoCommitInterval elapses (default 5s)
-    CS->>B: COMMIT topic groupId partition currentOffset
+    CS->>B: COMMIT_OFFSET / BATCH_COMMIT currentOffset
     B-->>CS: OK
 ```
 
@@ -174,11 +177,13 @@ CursusConsumerConfig config = CursusConsumerConfig.builder()
         .build();
 ```
 
+Set `autoOffsetReset` to `EARLIEST`, `LATEST`, or `ERROR` to control retention gaps reported by pull `ERROR: OFFSET_OUT_OF_RANGE ...` responses or streaming `STREAM_CONTROL type=CLOSE reason=offset_out_of_range ...` frames. The default is `EARLIEST`. Zero-length stream frames are treated as keepalives.
+
 The `immediateCommit` flag (default `false`) is reserved for future use. When set to `true` the consumer will commit after every individual message rather than batching commits by interval.
 
 ### At-least-once delivery
 
-Commits happen asynchronously. If the consumer process crashes between receiving a message and the next scheduled commit, those messages will be redelivered. Design your message handler to be idempotent, or use the `offset` field to deduplicate on the consumer side.
+Commits happen after the handler processes records. If the consumer process crashes between receiving a message and the next scheduled commit, those messages will be redelivered. Design your message handler to be idempotent, or use the `offset` field to deduplicate on the consumer side. Committing before processing gives at-most-once behavior and can skip records after a crash. Cursus does not yet provide Kafka transaction-level exactly-once semantics. Lower offset commits are rejected by the broker as `offset_regression`; the SDK treats that as a failed commit and does not rewind local committed state. Coordinator failures such as `GEN_MISMATCH`, `NOT_OWNER`, `member_not_found`, and `NOT_COORDINATOR` cause the consumer to fail closed or rejoin according to the current group state.
 
 ## Shutdown
 

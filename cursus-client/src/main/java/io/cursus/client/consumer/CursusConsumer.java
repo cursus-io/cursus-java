@@ -477,18 +477,24 @@ public class CursusConsumer implements AutoCloseable {
       byte[] response = sendCoordinatorCommandSync(cmd);
       String result = new String(response, StandardCharsets.UTF_8);
       if (result.startsWith("OK")) {
-        // Update committed offsets on success
         for (PartitionConsumer pc : partitionConsumers.values()) {
           long offset = pc.getCurrentOffset();
           if (offset > pc.getCommittedOffset()) {
-            // Reflection-free: commitOffset will also set committedOffset
-            // but we track via the batch commit response
+            pc.markCommitted(offset);
           }
         }
         log.debug("Batch commit succeeded");
         if (metrics != null) metrics.recordCommit();
+      } else if (ProtocolDecoder.isOffsetRegression(result)) {
+        log.warn("Batch commit rejected offset regression: {}", result);
+        if (metrics != null) metrics.recordCommitFailure();
+      } else if (ProtocolDecoder.isCoordinatorFailure(result)) {
+        log.warn("Batch commit coordinator failure: {}", result);
+        stopPartitionConsumers();
+        if (metrics != null) metrics.recordCommitFailure();
       } else {
         log.warn("Batch commit response: {}", result);
+        if (metrics != null) metrics.recordCommitFailure();
       }
     } catch (Exception e) {
       log.warn("Batch commit failed: {}", e.getMessage());

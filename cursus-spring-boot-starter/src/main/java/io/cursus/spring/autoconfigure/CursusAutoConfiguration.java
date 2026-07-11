@@ -1,6 +1,7 @@
 package io.cursus.spring.autoconfigure;
 
 import io.cursus.client.config.Acks;
+import io.cursus.client.config.AutoOffsetReset;
 import io.cursus.client.config.ConsumerMode;
 import io.cursus.client.config.CursusConsumerConfig;
 import io.cursus.client.config.CursusProducerConfig;
@@ -60,6 +61,7 @@ public class CursusAutoConfiguration {
                     ? ConsumerMode.POLLING
                     : ConsumerMode.STREAMING)
             .autoCommitInterval(c.getAutoCommitInterval())
+            .autoOffsetReset(parseAutoOffsetReset(c.getAutoOffsetReset()))
             .maxPollRecords(c.getMaxPollRecords())
             .sessionTimeoutMs(c.getSessionTimeoutMs())
             .heartbeatIntervalMs(c.getHeartbeatIntervalMs())
@@ -67,6 +69,14 @@ public class CursusAutoConfiguration {
             .tlsKeyPath(c.getTlsKeyPath())
             .build();
     return new CursusConsumer(config, meterRegistry);
+  }
+
+  private AutoOffsetReset parseAutoOffsetReset(String value) {
+    return switch (value.toLowerCase()) {
+      case "latest" -> AutoOffsetReset.LATEST;
+      case "error" -> AutoOffsetReset.ERROR;
+      default -> AutoOffsetReset.EARLIEST;
+    };
   }
 
   private Acks parseAcks(String value) {

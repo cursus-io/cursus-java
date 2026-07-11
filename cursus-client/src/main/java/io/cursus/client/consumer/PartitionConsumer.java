@@ -1,5 +1,6 @@
 package io.cursus.client.consumer;
 
+import io.cursus.client.config.AutoOffsetReset;
 import io.cursus.client.config.ConsumerMode;
 import io.cursus.client.config.CursusConsumerConfig;
 import io.cursus.client.connection.ConnectionManager;
@@ -194,6 +195,16 @@ public class PartitionConsumer {
           continue;
         }
 
+        if (ProtocolDecoder.isOffsetOutOfRange(response)) {
+          currentOffset.set(resolveOffsetReset(ProtocolDecoder.decodeOffsetOutOfRange(response)));
+          backoff.reset();
+          continue;
+        }
+        if (ProtocolDecoder.isCoordinatorFailure(response)) {
+          log.info("Coordinator failure for partition {}: {}", partitionId, response);
+          rebalanceRequired.set(true);
+          return;
+        }
         if (ProtocolDecoder.isErrorResponse(response)) {
           log.warn("Partition {} poll error: {}", partitionId, response);
           Thread.sleep(backoff.nextBackoff().toMillis());
@@ -272,6 +283,10 @@ public class PartitionConsumer {
             continue;
           }
 
+          if (responseBytes.length == 0) {
+            continue;
+          }
+
           String response = new String(responseBytes, StandardCharsets.UTF_8);
           if (response.contains("NOT_LEADER LEADER_IS")) {
             String[] parts = response.split("\\s+");
@@ -294,6 +309,22 @@ public class PartitionConsumer {
                     config.getTopic(), partitionId, group, currentOffset.get(), generation, member);
             connectionManager.sendCommandOnPartitionOneWay(partitionId, restream);
             continue;
+          }
+          if (ProtocolDecoder.isStreamControlFrame(responseBytes)) {
+            handleStreamControl(ProtocolDecoder.decodeStreamControl(responseBytes));
+            String restream =
+                CommandBuilder.stream(
+                    config.getTopic(), partitionId, group, currentOffset.get(), generation, member);
+            connectionManager.sendCommandOnPartitionOneWay(partitionId, restream);
+            continue;
+          }
+          if (ProtocolDecoder.isCoordinatorFailure(response)) {
+            log.info(
+                "Coordinator failure for partition {} in streaming mode: {}",
+                partitionId,
+                response);
+            rebalanceRequired.set(true);
+            return;
           }
           if (ProtocolDecoder.isErrorResponse(response)) {
             log.warn("Partition {} stream broker error: {}", partitionId, response);
@@ -380,6 +411,44 @@ public class PartitionConsumer {
     }
   }
 
+  public void markCommitted(long offset) {
+    committedOffset.updateAndGet(current -> Math.max(current, offset));
+  }
+
+  private long resolveOffsetReset(ProtocolDecoder.OffsetRange range) {
+    AutoOffsetReset policy = config.getAutoOffsetReset();
+    if (policy == AutoOffsetReset.EARLIEST) {
+      return range.earliest();
+    }
+    if (policy == AutoOffsetReset.LATEST) {
+      return range.latest();
+    }
+    running.set(false);
+    throw new CursusProtocolException(
+        "Offset out of range: requested="
+            + range.requested()
+            + " earliest="
+            + range.earliest()
+            + " latest="
+            + range.latest());
+  }
+
+  private void handleStreamControl(ProtocolDecoder.StreamControl control) {
+    if ("offset_out_of_range".equals(control.reason())) {
+      if (control.requested() == null || control.earliest() == null || control.latest() == null) {
+        throw new CursusProtocolException("STREAM_CONTROL missing offset range: " + control);
+      }
+      currentOffset.set(
+          resolveOffsetReset(
+              new ProtocolDecoder.OffsetRange(
+                  control.requested(), control.earliest(), control.latest())));
+      return;
+    }
+    if ("CLOSE".equals(control.type()) && control.offset() != null) {
+      currentOffset.set(control.offset());
+    }
+  }
+
   /** Commits the current offset for this partition using COMMIT_OFFSET on the leader connection. */
   public void commitOffset() {
     long offset = currentOffset.get();
@@ -389,8 +458,17 @@ public class PartitionConsumer {
           CommandBuilder.commitOffset(
               config.getTopic(), partitionId, group, offset, generation, member);
       String target = coordinatorAddr != null ? coordinatorAddr : config.getBrokers().get(0);
-      sendPlainCommand(target, command);
-      committedOffset.set(offset);
+      String result = new String(sendPlainCommand(target, command), StandardCharsets.UTF_8).trim();
+      if (result.startsWith("OK")) {
+        markCommitted(offset);
+      } else if (ProtocolDecoder.isOffsetRegression(result)) {
+        log.warn("Broker rejected regressive commit for partition {}: {}", partitionId, result);
+      } else if (ProtocolDecoder.isCoordinatorFailure(result)) {
+        rebalanceRequired.set(true);
+        log.warn("Coordinator rejected commit for partition {}: {}", partitionId, result);
+      } else {
+        log.warn("Failed to commit offset {} for partition {}: {}", offset, partitionId, result);
+      }
     } catch (Exception e) {
       log.warn(
           "Failed to commit offset {} for partition {}: {}", offset, partitionId, e.getMessage());

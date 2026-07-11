@@ -36,6 +36,7 @@ Build with `CursusConsumerConfig.builder()`. `topic` is required; `groupId` is r
 | `topic` | `String` | — | **Required.** Topic to consume from. |
 | `groupId` | `String` | `null` | Consumer group identifier. Required for partition assignment via JOIN_GROUP / SYNC_GROUP. |
 | `consumerMode` | `ConsumerMode` | `STREAMING` | `STREAMING` — broker pushes messages over a persistent connection. `POLLING` — consumer polls with `CONSUME` commands. |
+| `autoOffsetReset` | `AutoOffsetReset` | `EARLIEST` | Retention gap policy: `EARLIEST`, `LATEST`, or `ERROR`. |
 | `autoCommitInterval` | `Duration` | `5s` | How often the consumer commits its current offset to the broker. |
 | `sessionTimeoutMs` | `long` | `30000` | Maximum time in milliseconds the broker waits for a heartbeat before considering the consumer dead. |
 | `heartbeatIntervalMs` | `long` | `3000` | Interval in milliseconds between heartbeat sends. Should be well below `sessionTimeoutMs`. |
@@ -88,6 +89,7 @@ A `CursusConsumer` bean is only created when `cursus.consumer.topic` is present.
 | `cursus.consumer.topic` | `topic` | `String` | — | Topic to subscribe to. |
 | `cursus.consumer.group-id` | `groupId` | `String` | `null` | Consumer group identifier. |
 | `cursus.consumer.mode` | `mode` | `String` | `"streaming"` | `"streaming"` or `"polling"`. |
+| `cursus.consumer.auto-offset-reset` | `autoOffsetReset` | `String` | `"earliest"` | `"earliest"`, `"latest"`, or `"error"`. |
 | `cursus.consumer.auto-commit-interval` | `autoCommitInterval` | `Duration` | `5s` | Offset commit interval. |
 | `cursus.consumer.max-poll-records` | `maxPollRecords` | `int` | `100` | Max records per poll. |
 | `cursus.consumer.session-timeout-ms` | `sessionTimeoutMs` | `long` | `30000` | Session timeout in milliseconds. |

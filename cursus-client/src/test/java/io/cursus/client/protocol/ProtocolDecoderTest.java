@@ -109,6 +109,55 @@ class ProtocolDecoderTest {
   }
 
   @Test
+  void decodeOffsetOutOfRangeResponse() {
+    String response = "ERROR: OFFSET_OUT_OF_RANGE requested=3 earliest=10 latest=20";
+
+    ProtocolDecoder.OffsetRange range = ProtocolDecoder.decodeOffsetOutOfRange(response);
+
+    assertThat(ProtocolDecoder.isOffsetOutOfRange(response)).isTrue();
+    assertThat(range.requested()).isEqualTo(3);
+    assertThat(range.earliest()).isEqualTo(10);
+    assertThat(range.latest()).isEqualTo(20);
+  }
+
+  @Test
+  void decodeStreamControlOffsetOutOfRange() {
+    byte[] frame =
+        ("STREAM_CONTROL type=CLOSE reason=offset_out_of_range "
+                + "offset=3 requested=3 earliest=10 latest=20")
+            .getBytes(StandardCharsets.UTF_8);
+
+    ProtocolDecoder.StreamControl control = ProtocolDecoder.decodeStreamControl(frame);
+
+    assertThat(ProtocolDecoder.isStreamControlFrame(frame)).isTrue();
+    assertThat(control.type()).isEqualTo("CLOSE");
+    assertThat(control.reason()).isEqualTo("offset_out_of_range");
+    assertThat(control.offset()).isEqualTo(3);
+    assertThat(control.requested()).isEqualTo(3);
+    assertThat(control.earliest()).isEqualTo(10);
+    assertThat(control.latest()).isEqualTo(20);
+  }
+
+  @Test
+  void zeroLengthFrameIsNotStreamControl() {
+    assertThat(ProtocolDecoder.isStreamControlFrame(new byte[0])).isFalse();
+  }
+
+  @Test
+  void commitFailureClassifiers() {
+    assertThat(
+            ProtocolDecoder.isOffsetRegression("ERROR: offset_regression current=10 attempted=9"))
+        .isTrue();
+    assertThat(ProtocolDecoder.isCoordinatorFailure("ERROR: GEN_MISMATCH expected=2 actual=1"))
+        .isTrue();
+    assertThat(ProtocolDecoder.isCoordinatorFailure("ERROR: NOT_OWNER partition=0")).isTrue();
+    assertThat(ProtocolDecoder.isCoordinatorFailure("ERROR: member_not_found member=m1")).isTrue();
+    assertThat(
+            ProtocolDecoder.isCoordinatorFailure("ERROR: NOT_COORDINATOR host=127.0.0.1 port=9001"))
+        .isTrue();
+  }
+
+  @Test
   void decodeVersionResponseOk() {
     assertThat(ProtocolDecoder.decodeVersionResponse("OK version=7")).isEqualTo(7);
   }
