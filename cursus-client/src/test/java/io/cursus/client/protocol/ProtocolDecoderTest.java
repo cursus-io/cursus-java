@@ -169,8 +169,7 @@ class ProtocolDecoderTest {
             ProtocolDecoder.isTerminalProducerError(
                 "ERROR: broker_error reason=\"idempotency error\""))
         .isTrue();
-    assertThat(
-            ProtocolDecoder.isTerminalProducerError("ERROR: stale producer epoch producer=p1"))
+    assertThat(ProtocolDecoder.isTerminalProducerError("ERROR: stale producer epoch producer=p1"))
         .isTrue();
     assertThat(
             ProtocolDecoder.isTerminalProducerError(
