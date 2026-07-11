@@ -4,7 +4,7 @@ Java client library for the [Cursus](https://github.com/cursus-io/cursus) messag
 
 ## Features
 
-- **Producer** — Partition batching, gzip compression, idempotent delivery, configurable linger time
+- **Producer** — Partition batching, gzip compression, idempotent writes, configurable linger time
 - **Consumer** — Polling and streaming modes, consumer groups with modulo-based partition assignment
 - **Consumer Groups** — Automatic join/sync/leave lifecycle with heartbeating and rebalance handling
 - **Spring Boot Starter** — Zero-boilerplate auto-configuration and `@CursusListener` annotation

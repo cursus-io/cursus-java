@@ -104,26 +104,29 @@ sequenceDiagram
     participant CS as Commit Scheduler
     participant CM as ConnectionManager
 
+    PC->>CM: FETCH_OFFSET after JOIN_GROUP / SYNC_GROUP
+    CM->>B: broker committed next offset
+
     B->>FD: TCP frame (4-byte length prefix + payload, max 64 MB)
     FD->>CH: stripped payload bytes
     CH->>CH: CompletableFuture<byte[]> resolved
     CH->>PC: bytes
 
     alt STREAMING mode
-        Note over PC,B: STREAM topic partition offset<br/>Broker pushes frames continuously
+        Note over PC,B: STREAM topic=T partition=P offset=nextOffset<br/>Broker pushes frames continuously
     else POLLING mode
-        Note over PC,B: CONSUME topic partition offset<br/>Client polls each loop iteration
+        Note over PC,B: CONSUME topic=T partition=P offset=nextOffset<br/>Client polls each loop iteration
     end
 
     PC->>PD: decodeBatchMessages(bytes)
     loop for each CursusMessage
         PD->>H: handler.accept(msg)
-        PC->>PC: currentOffset = msg.getOffset() + 1
+        PC->>PC: nextOffset = msg.getOffset() + 1
     end
 
     CS->>CS: autoCommitInterval fires
-    CS->>CM: CommandBuilder.commit(topic, groupId, partition, offset)
-    CM->>B: COMMIT command
+    CS->>CM: CommandBuilder.commitOffset(...) or batchCommit(...)
+    CM->>B: COMMIT_OFFSET / BATCH_COMMIT
 ```
 
 ## Go SDK Mapping

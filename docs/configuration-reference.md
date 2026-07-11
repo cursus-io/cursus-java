@@ -37,7 +37,7 @@ Build with `CursusConsumerConfig.builder()`. `topic` is required; `groupId` is r
 | `groupId` | `String` | `null` | Consumer group identifier. Required for partition assignment via JOIN_GROUP / SYNC_GROUP. |
 | `consumerMode` | `ConsumerMode` | `STREAMING` | `STREAMING` — broker pushes messages over a persistent connection. `POLLING` — consumer polls with `CONSUME` commands. |
 | `autoOffsetReset` | `AutoOffsetReset` | `EARLIEST` | Retention gap policy: `EARLIEST`, `LATEST`, or `ERROR`. |
-| `autoCommitInterval` | `Duration` | `5s` | How often the consumer commits its current offset to the broker. |
+| `autoCommitInterval` | `Duration` | `5s` | How often the consumer commits the next offset to read to the broker. |
 | `sessionTimeoutMs` | `long` | `30000` | Maximum time in milliseconds the broker waits for a heartbeat before considering the consumer dead. |
 | `heartbeatIntervalMs` | `long` | `3000` | Interval in milliseconds between heartbeat sends. Should be well below `sessionTimeoutMs`. |
 | `maxPollRecords` | `int` | `100` | Maximum number of messages returned in a single `CONSUME` poll response (polling mode only). |
@@ -74,7 +74,7 @@ A `CursusProducer` bean is only created when `cursus.producer.topic` is present.
 | `cursus.producer.batch-size` | `batchSize` | `int` | `500` | Batch size threshold. |
 | `cursus.producer.linger-ms` | `lingerMs` | `long` | `100` | Linger time in milliseconds. |
 | `cursus.producer.compression-type` | `compressionType` | `String` | `"none"` | `"none"` or `"gzip"`. |
-| `cursus.producer.idempotent` | `idempotent` | `boolean` | `false` | Enable idempotent delivery. |
+| `cursus.producer.idempotent` | `idempotent` | `boolean` | `false` | Enable idempotent producer writes. |
 | `cursus.producer.max-inflight-requests` | `maxInflightRequests` | `int` | `5` | Concurrent in-flight sends. |
 | `cursus.producer.flush-timeout-ms` | `flushTimeoutMs` | `long` | `30000` | Flush timeout in milliseconds. |
 | `cursus.producer.tls-cert-path` | `tlsCertPath` | `String` | `null` | TLS certificate path. |
