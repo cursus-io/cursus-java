@@ -456,14 +456,14 @@ public class CursusConsumer implements AutoCloseable {
   private void commitAllOffsets() {
     if (!running.get() || partitionConsumers.isEmpty()) return;
 
-    // Build batch commit payload: <pid>:<offset>,<pid>:<offset>
+    // Build batch commit payload: P<partition>:<nextOffset>,P<partition>:<nextOffset>
     StringBuilder sb = new StringBuilder();
     boolean first = true;
     for (PartitionConsumer pc : partitionConsumers.values()) {
       long offset = pc.getCurrentOffset();
       if (offset > pc.getCommittedOffset()) {
         if (!first) sb.append(',');
-        sb.append(pc.getPartitionId()).append(':').append(offset);
+        sb.append('P').append(pc.getPartitionId()).append(':').append(offset);
         first = false;
       }
     }

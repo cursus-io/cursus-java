@@ -137,6 +137,13 @@ public class PartitionConsumer {
         String target = coordinatorAddr != null ? coordinatorAddr : config.getBrokers().get(0);
         response = sendPlainCommand(target, cmd);
         String result = new String(response, StandardCharsets.UTF_8).trim();
+        if (result.contains("NOT_COORDINATOR")) {
+          String redirected = parseCoordinatorAddress(result);
+          if (redirected != null) {
+            response = sendPlainCommand(redirected, cmd);
+            result = new String(response, StandardCharsets.UTF_8).trim();
+          }
+        }
         if (result.isEmpty()
             || ProtocolDecoder.isErrorResponse(result)
             || result.startsWith("NOT_AUTHORIZED")) {
@@ -376,6 +383,19 @@ public class PartitionConsumer {
     }
   }
 
+  private String parseCoordinatorAddress(String response) {
+    String host = null;
+    String port = null;
+    for (String part : response.split("\\s+")) {
+      if (part.startsWith("host=")) {
+        host = part.substring(5);
+      } else if (part.startsWith("port=")) {
+        port = part.substring(5);
+      }
+    }
+    return host != null && port != null ? host + ":" + port : null;
+  }
+
   private byte[] sendPlainCommand(String addr, String command) throws Exception {
     String[] parts = addr.split(":");
     String host = parts[0];
@@ -435,13 +455,15 @@ public class PartitionConsumer {
 
   private void handleStreamControl(ProtocolDecoder.StreamControl control) {
     if ("offset_out_of_range".equals(control.reason())) {
-      if (control.requested() == null || control.earliest() == null || control.latest() == null) {
+      if (control.earliest() == null || control.latest() == null) {
         throw new CursusProtocolException("STREAM_CONTROL missing offset range: " + control);
       }
       currentOffset.set(
           resolveOffsetReset(
               new ProtocolDecoder.OffsetRange(
-                  control.requested(), control.earliest(), control.latest())));
+                  (control.requested() != null ? control.requested() : currentOffset.get()),
+                  control.earliest(),
+                  control.latest())));
       return;
     }
     if ("CLOSE".equals(control.type()) && control.offset() != null) {

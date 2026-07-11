@@ -54,7 +54,7 @@ Text commands are UTF-8 strings. Fields are separated by a single space. The ent
 | `STREAM` | `STREAM <topic> <partition> <offset>` | Open a persistent push stream; broker sends batches as they arrive |
 | `COMMIT` | `COMMIT <topic> <group> <partition> <offset>` | Commit a consumer offset for a partition |
 | `HEARTBEAT` | `HEARTBEAT <topic> <group> <consumerId> <memberId> <generation>` | Keep-alive; broker may respond with `REBALANCE_REQUIRED` |
-| `BATCH_COMMIT` | `BATCH_COMMIT <topic> <group> <memberId> <generation> <offsetsPayload>` | Commit offsets for multiple partitions in one round-trip |
+| `BATCH_COMMIT` | `BATCH_COMMIT <topic> <group> <memberId> <generation> P<partition>:<offset>,...` | Commit offsets for multiple partitions in one round-trip |
 | `SYNC_GROUP` | `SYNC_GROUP <topic> <group> <memberId> <generation>` | Fetch partition assignment after joining a group |
 
 ### Command Routing

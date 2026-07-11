@@ -77,8 +77,8 @@ class CommandBuilderTest {
 
   @Test
   void batchCommit() {
-    assertThat(CommandBuilder.batchCommit("t", "g", 1, "m1", "0:100,1:200"))
-        .isEqualTo("BATCH_COMMIT topic=t group=g generation=1 member=m1 0:100,1:200");
+    assertThat(CommandBuilder.batchCommit("t", "g", 1, "m1", "P0:100,P1:200"))
+        .isEqualTo("BATCH_COMMIT topic=t group=g member=m1 generation=1 P0:100,P1:200");
   }
 
   @Test

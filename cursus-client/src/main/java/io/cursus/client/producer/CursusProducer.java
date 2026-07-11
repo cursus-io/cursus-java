@@ -360,7 +360,16 @@ public class CursusProducer implements AutoCloseable {
                     return;
                   }
 
-                  if (ack.hasError()) log.warn("Batch error: {}", ack.getErrorMsg());
+                  if (ack.hasError()) {
+                    if (ProtocolDecoder.isStaleProducerEpoch(ack)) {
+                      closed.set(true);
+                      batchStates.remove(batchId);
+                      if (metrics != null) metrics.recordFailure(messages.size());
+                      log.error("Producer fenced by stale producer epoch: {}", ack.getErrorMsg());
+                      return;
+                    }
+                    log.warn("Batch error: {}", ack.getErrorMsg());
+                  }
                 } catch (TimeoutException e) {
                   log.warn("Batch send timeout on attempt {}", attempt + 1);
                 } catch (Exception e) {

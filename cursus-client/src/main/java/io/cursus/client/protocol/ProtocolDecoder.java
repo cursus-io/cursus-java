@@ -144,7 +144,16 @@ public final class ProtocolDecoder {
         && (response.contains("GEN_MISMATCH")
             || response.contains("NOT_OWNER")
             || response.contains("member_not_found")
+            || response.contains("group_not_found")
             || response.contains("NOT_COORDINATOR"));
+  }
+
+  public static boolean isStaleProducerEpoch(String response) {
+    return response != null && response.contains("stale_producer_epoch");
+  }
+
+  public static boolean isStaleProducerEpoch(io.cursus.client.message.AckResponse ack) {
+    return ack != null && isStaleProducerEpoch(ack.getErrorMsg());
   }
 
   public static boolean isOffsetRegression(String response) {

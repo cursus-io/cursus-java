@@ -208,3 +208,5 @@ long seq = producer.send(payload);
 ```
 
 See [Configuration Reference](configuration-reference.md) for all producer properties.
+
+If the broker returns `ERROR: stale_producer_epoch ...`, the producer treats the session as fenced and does not retry it as a transient publish failure. Recreate the producer to start a new idempotent session.

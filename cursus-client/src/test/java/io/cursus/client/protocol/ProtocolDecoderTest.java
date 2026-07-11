@@ -152,8 +152,11 @@ class ProtocolDecoderTest {
         .isTrue();
     assertThat(ProtocolDecoder.isCoordinatorFailure("ERROR: NOT_OWNER partition=0")).isTrue();
     assertThat(ProtocolDecoder.isCoordinatorFailure("ERROR: member_not_found member=m1")).isTrue();
+    assertThat(ProtocolDecoder.isCoordinatorFailure("ERROR: group_not_found group=g1")).isTrue();
     assertThat(
             ProtocolDecoder.isCoordinatorFailure("ERROR: NOT_COORDINATOR host=127.0.0.1 port=9001"))
+        .isTrue();
+    assertThat(ProtocolDecoder.isStaleProducerEpoch("ERROR: stale_producer_epoch producer=p1"))
         .isTrue();
   }
 
