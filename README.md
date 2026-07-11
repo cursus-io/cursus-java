@@ -24,7 +24,7 @@ Java client library for the [Cursus](https://github.com/cursus-io/cursus) messag
 ```groovy
 // build.gradle
 dependencies {
-    implementation 'io.cursus:cursus-client:0.1.0'
+    implementation 'io.github.cursus-io:cursus-client:0.1.0'
 }
 ```
 
@@ -32,7 +32,7 @@ Maven:
 
 ```xml
 <dependency>
-  <groupId>io.cursus</groupId>
+  <groupId>io.github.cursus-io</groupId>
   <artifactId>cursus-client</artifactId>
   <version>0.1.0</version>
 </dependency>
@@ -51,7 +51,7 @@ import io.cursus.client.eventstore.CursusEventStore;
 ```groovy
 // build.gradle
 dependencies {
-    implementation 'io.cursus:cursus-spring-boot-starter:0.1.0'
+    implementation 'io.github.cursus-io:cursus-spring-boot-starter:0.1.0'
     implementation 'org.springframework.boot:spring-boot-starter-web'
 }
 ```
