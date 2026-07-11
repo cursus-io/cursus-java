@@ -92,10 +92,10 @@ public final class CommandBuilder {
         + topic
         + " group="
         + group
-        + " generation="
-        + generation
         + " member="
         + member
+        + " generation="
+        + generation
         + " "
         + offsets;
   }

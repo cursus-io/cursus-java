@@ -17,7 +17,7 @@ jobs:
     runs-on: ubuntu-latest
     environment:
       name: maven-central
-      url: https://central.sonatype.com/artifact/io.cursus/cursus-client/${{ inputs.version }}
+      url: https://central.sonatype.com/artifact/io.github.cursus-io/cursus-client/${{ inputs.version }}
 
     steps:
       - uses: actions/checkout@v7
@@ -39,15 +39,12 @@ jobs:
             exit 1
           fi
 
-      - name: Set release version
-        run: sed -i "s/version=.*/version=${{ inputs.version }}/" gradle.properties
-
       - name: Build
-        run: ./gradlew build
+        run: ./gradlew -Pversion=${{ inputs.version }} build
 
       - name: Stage signed artifacts for Central Portal
         run: |
-          ./gradlew \
+          ./gradlew -Pversion=${{ inputs.version }} \
             :cursus-client:publishMavenJavaPublicationToCentralBundleRepository \
             :cursus-spring-boot-starter:publishMavenJavaPublicationToCentralBundleRepository
         env:
@@ -91,7 +88,7 @@ jobs:
 
             ```gradle
             dependencies {
-                implementation "io.cursus:cursus-client:${{ inputs.version }}"
+                implementation "io.github.cursus-io:cursus-client:${{ inputs.version }}"
             }
             ```
 
@@ -99,7 +96,7 @@ jobs:
 
             ```gradle
             dependencies {
-                implementation "io.cursus:cursus-spring-boot-starter:${{ inputs.version }}"
+                implementation "io.github.cursus-io:cursus-spring-boot-starter:${{ inputs.version }}"
             }
             ```
 
@@ -107,7 +104,7 @@ jobs:
 
             ```xml
             <dependency>
-              <groupId>io.cursus</groupId>
+              <groupId>io.github.cursus-io</groupId>
               <artifactId>cursus-client</artifactId>
               <version>${{ inputs.version }}</version>
             </dependency>
@@ -117,7 +114,7 @@ jobs:
 
             ```xml
             <dependency>
-              <groupId>io.cursus</groupId>
+              <groupId>io.github.cursus-io</groupId>
               <artifactId>cursus-spring-boot-starter</artifactId>
               <version>${{ inputs.version }}</version>
             </dependency>
@@ -131,6 +128,6 @@ jobs:
 
             ## Links
 
-            - Maven Central core client: https://central.sonatype.com/artifact/io.cursus/cursus-client/${{ inputs.version }}
-            - Maven Central Spring Boot starter: https://central.sonatype.com/artifact/io.cursus/cursus-spring-boot-starter/${{ inputs.version }}
+            - Maven Central core client: https://central.sonatype.com/artifact/io.github.cursus-io/cursus-client/${{ inputs.version }}
+            - Maven Central Spring Boot starter: https://central.sonatype.com/artifact/io.github.cursus-io/cursus-spring-boot-starter/${{ inputs.version }}
             - Documentation: https://github.com/cursus-io/cursus-java#readme

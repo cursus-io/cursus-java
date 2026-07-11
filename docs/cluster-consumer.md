@@ -77,13 +77,13 @@ sequenceDiagram
     CO-->>C: OK generation=1 member=M-1234 assignments=[0,1]
 
     C->>CO: FETCH_OFFSET topic=T partition=0 group=G
-    CO-->>C: 0
+    CO-->>C: OK offset=42
 
     C->>B: METADATA topic=T
     B-->>C: OK leaders=H1:P1,H2:P2
 
     loop Poll Loop
-        C->>PL: CONSUME topic=T partition=0 offset=0 member=M-1234 group=G generation=1
+        C->>PL: CONSUME topic=T partition=0 offset=42 group=G generation=1 member=M-1234
         PL-->>C: batch(messages)
     end
 
@@ -117,10 +117,10 @@ flowchart TD
 
 ### Java SDK
 
-- `CursusConsumer.findCoordinator()` — sends `FIND_COORDINATOR` via `sendPlainSocket`
+- `CursusConsumer.findCoordinator()` — sends `FIND_COORDINATOR` via a plain framed TCP command
 - `CursusConsumer.sendCoordinatorCommandSync(cmd)` — sends to coordinator, retries on NOT_COORDINATOR
 - `CursusConsumer.fetchMetadata()` — sends `METADATA`, populates `partitionLeaders` map
 - `PartitionConsumer.sendPlainCommand(addr, cmd)` — per-request TCP socket (like Python SDK)
-- `PartitionConsumer.runPollingLoop()` — CONSUME to partition leader, handles NOT_LEADER redirect
+- `PartitionConsumer.runPollingLoop()` — calls `FETCH_OFFSET`, then sends `CONSUME` to the partition leader and handles NOT_LEADER redirects
 - `CommandBuilder.findCoordinator(group)` / `CommandBuilder.metadata(topic)` — new commands
-- `ProtocolDecoder.isErrorResponse()` — now matches both `"ERROR:"` and `"ERROR "` prefixes
+- `ProtocolDecoder.isErrorResponse()` — matches both `"ERROR:"` and `"ERROR "` prefixes

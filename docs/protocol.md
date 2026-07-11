@@ -44,18 +44,21 @@ Text commands are UTF-8 strings. Fields are separated by a single space. The ent
 
 | Command | Format | Description |
 |---|---|---|
-| `CREATE` | `CREATE <topic> <partitions>` | Create a new topic with the given partition count |
-| `DELETE` | `DELETE <topic>` | Delete a topic and all its data |
-| `LIST` | `LIST` | List all topics on the broker |
-| `CONSUME` | `CONSUME <topic> <partition> <offset>` | Pull up to `maxPollRecords` messages starting at `offset` |
-| `SUBSCRIBE` | `SUBSCRIBE <topic> <group>` | Subscribe a consumer group to a topic |
-| `JOIN_GROUP` | `JOIN_GROUP <topic> <group> <consumerId>` | Join a consumer group; broker registers the member |
-| `LEAVE_GROUP` | `LEAVE_GROUP <topic> <group> <consumerId>` | Leave a consumer group; triggers partition rebalance |
-| `STREAM` | `STREAM <topic> <partition> <offset>` | Open a persistent push stream; broker sends batches as they arrive |
-| `COMMIT` | `COMMIT <topic> <group> <partition> <offset>` | Commit a consumer offset for a partition |
-| `HEARTBEAT` | `HEARTBEAT <topic> <group> <consumerId> <memberId> <generation>` | Keep-alive; broker may respond with `REBALANCE_REQUIRED` |
-| `BATCH_COMMIT` | `BATCH_COMMIT <topic> <group> <memberId> <generation> <offsetsPayload>` | Commit offsets for multiple partitions in one round-trip |
-| `SYNC_GROUP` | `SYNC_GROUP <topic> <group> <memberId> <generation>` | Fetch partition assignment after joining a group |
+| `CREATE` | `CREATE topic=<topic> partitions=<N>` | Create a new topic with the given partition count |
+| `DELETE` | `DELETE topic=<topic>` | Delete a topic and all its data |
+| `LIST` | `LIST` or `LIST topic=<topic>` | List all topics or describe one topic |
+| `CONSUME` | `CONSUME topic=<topic> partition=<P> offset=<N> group=<group> generation=<G> member=<member>` | Stateless partition-leader pull read starting at `offset` |
+| `SUBSCRIBE` | `SUBSCRIBE topic=<topic> group=<group>` | Subscribe a consumer group to a topic |
+| `JOIN_GROUP` | `JOIN_GROUP topic=<topic> group=<group> member=<member>` | Join a consumer group; broker registers the member |
+| `LEAVE_GROUP` | `LEAVE_GROUP topic=<topic> group=<group> member=<member>` | Leave a consumer group; triggers partition rebalance |
+| `STREAM` | `STREAM topic=<topic> partition=<P> group=<group> offset=<N> generation=<G> member=<member>` | Stateless partition-leader push stream; broker sends batches as they arrive |
+| `COMMIT_OFFSET` | `COMMIT_OFFSET topic=<topic> partition=<P> group=<group> offset=<nextOffset> generation=<G> member=<member>` | Commit the next offset to read for one partition |
+| `HEARTBEAT` | `HEARTBEAT topic=<topic> group=<group> member=<member> generation=<G>` | Keep-alive and generation fencing; coordinator errors trigger rejoin |
+| `BATCH_COMMIT` | `BATCH_COMMIT topic=<topic> group=<group> member=<member> generation=<G> P<partition>:<nextOffset>,...` | Commit next offsets for multiple partitions in one round-trip |
+| `SYNC_GROUP` | `SYNC_GROUP topic=<topic> group=<group> member=<member> generation=<G>` | Fetch partition assignment after joining a group |
+| `FETCH_OFFSET` | `FETCH_OFFSET topic=<topic> partition=<P> group=<group>` | Fetch broker-committed next offset before consuming an assigned partition |
+| `FIND_COORDINATOR` | `FIND_COORDINATOR group=<group>` | Resolve the current coordinator for a consumer group |
+| `METADATA` | `METADATA topic=<topic>` | Fetch cluster metadata, including partition leaders |
 
 ### Command Routing
 
@@ -71,8 +74,23 @@ flowchart TB
     F --> G[Topic management\nCREATE / DELETE / LIST]
     F --> H[Consumer group\nJOIN_GROUP / LEAVE_GROUP\nSYNC_GROUP / SUBSCRIBE]
     F --> I[Streaming & polling\nSTREAM / CONSUME]
-    F --> J[Offset & heartbeat\nCOMMIT / BATCH_COMMIT\nHEARTBEAT]
+    F --> J[Offset & heartbeat\nFETCH_OFFSET / COMMIT_OFFSET\nBATCH_COMMIT / HEARTBEAT]
 ```
+
+
+## Consumer Offset Contract
+
+Consumer group offsets are broker-managed and durable. The committed value is the next offset to read, so after processing offset `N`, the SDK commits `N + 1`. After `JOIN_GROUP` and `SYNC_GROUP`, the SDK calls `FETCH_OFFSET` for each assigned partition before issuing `CONSUME` or `STREAM`.
+
+`CONSUME` and `STREAM` are stateless partition-leader read paths. Ownership and generation fencing are enforced by coordinator commands such as `HEARTBEAT`, `COMMIT_OFFSET`, and `BATCH_COMMIT`. Batch commit entries must use the `P<partition>:<nextOffset>` form, for example:
+
+```text
+BATCH_COMMIT topic=orders group=workers member=m-1 generation=7 P0:11,P1:21
+```
+
+Lower offset commits are rejected by the broker as `ERROR: offset_regression ...`; the SDK treats that as a failed commit and does not rewind local committed state. Coordinator errors such as `GEN_MISMATCH`, `NOT_OWNER`, `member_not_found`, `group_not_found`, and `NOT_COORDINATOR` cause the consumer to re-resolve or rejoin.
+
+For retention gaps, pull consumers handle `ERROR: OFFSET_OUT_OF_RANGE requested=<N> earliest=<N> latest=<N>`, and streaming consumers handle `STREAM_CONTROL type=CLOSE reason=offset_out_of_range ...`. Zero-length stream frames are keepalives.
 
 ## Batch Message Encoding
 
@@ -84,9 +102,8 @@ Producers send messages in binary batch format. The batch body (after the frame 
 │  uint16   magic = 0xBA7C                                            │
 │  uint16   topicLen                                                  │
 │  bytes    topic (UTF-8)                                             │
-│  uint16   partitionLen                                              │
-│  bytes    partition (UTF-8 decimal, e.g. "0")                      │
-│  uint16   acksLen                                                   │
+│  int32    partition                                                 │
+│  uint8    acksLen                                                   │
 │  bytes    acks (UTF-8, e.g. "1", "0", "-1")                        │
 │  uint8    idempotent (0x00 = false, 0x01 = true)                   │
 │  int64    seqStart (big-endian)                                     │
@@ -112,7 +129,7 @@ Producers send messages in binary batch format. The batch body (after the frame 
 └─────────────────────────────────────────────────────────────────────┘
 ```
 
-All integer fields are big-endian. Length-prefixed strings use a `uint16` (2-byte) length followed by the UTF-8 bytes; an empty string is encoded as `0x0000` with no following bytes.
+All integer fields are big-endian. Topic, producer id, key, event type, and metadata strings use a `uint16` (2-byte) length followed by UTF-8 bytes. The `acks` header uses a `uint8` length followed by UTF-8 bytes. Empty strings are encoded as length `0` with no following bytes.
 
 The magic value `0xBA7C` (decimal 47740) identifies the frame as a Cursus batch. Any frame that does not begin with this magic value is treated as a text command.
 
@@ -150,7 +167,9 @@ Special text responses (not JSON) the client also handles:
 |---|---|
 | Contains `NOT_LEADER` | The broker is not the current partition leader; client clears cached leader and retries |
 | Contains `REBALANCE_REQUIRED` | Consumer group rebalance is needed; consumer stops and rejoins |
-| Contains `GEN_MISMATCH` | Consumer's generation number is out of date; consumer rejoins |
+| Contains `GEN_MISMATCH` / `NOT_OWNER` / `member_not_found` / `group_not_found` / `NOT_COORDINATOR` | Consumer group state is invalid or coordinator moved; consumer stops, re-resolves, or rejoins |
+| Starts with `ERROR: offset_regression` | Commit failed because it would move the broker committed offset backward |
+| Starts with `ERROR: OFFSET_OUT_OF_RANGE` | Requested consume offset is outside the retained range; `autoOffsetReset` decides earliest/latest/error |
 | Starts with `ERROR:` | Hard broker error; the prefix is followed by an error description |
 
 ## Compression

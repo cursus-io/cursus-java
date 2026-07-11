@@ -45,6 +45,8 @@ public class CursusProducer implements AutoCloseable {
   private final Set<CompletableFuture<Void>> inflightFutures = ConcurrentHashMap.newKeySet();
   private final AtomicLong batchIdGenerator = new AtomicLong(0);
   private final Map<Integer, String> partitionLeaders = new ConcurrentHashMap<>();
+  private final String producerId;
+  private final int producerEpoch;
   private CursusProducerMetrics metrics;
 
   private static final Pattern PARTITION_COUNT_PATTERN = Pattern.compile("partitions=(\\d+)");
@@ -55,6 +57,8 @@ public class CursusProducer implements AutoCloseable {
 
   public CursusProducer(CursusProducerConfig config, Object metricsRegistry) {
     this.config = config;
+    this.producerId = "java-" + UUID.randomUUID();
+    this.producerEpoch = (int) (System.currentTimeMillis() / 1000L);
     this.connectionManager =
         new ConnectionManager(
             config.getBrokers(), config.getTlsCertPath(),
@@ -86,7 +90,9 @@ public class CursusProducer implements AutoCloseable {
 
     this.partitionBuffers = new PartitionBuffer[verifiedPartitions];
     for (int i = 0; i < verifiedPartitions; i++) {
-      partitionBuffers[i] = new PartitionBuffer(i, config.getBatchSize(), config.getBufferSize());
+      partitionBuffers[i] =
+          new PartitionBuffer(
+              i, config.getBatchSize(), config.getBufferSize(), producerId, producerEpoch);
     }
 
     fetchMetadata();
@@ -231,9 +237,9 @@ public class CursusProducer implements AutoCloseable {
     if (closed.get()) throw new CursusProducerClosedException();
 
     int partition =
-        (key != null)
-            ? FnvHash.partition(key, config.getPartitions())
-            : roundRobinCounter.getAndIncrement() % config.getPartitions();
+        key != null
+            ? selectPartition(key, 0, partitionBuffers.length)
+            : selectPartition(null, roundRobinCounter.getAndIncrement(), partitionBuffers.length);
 
     PartitionBuffer buffer = partitionBuffers[partition];
     long seqNum = buffer.add(payload, key);
@@ -243,6 +249,15 @@ public class CursusProducer implements AutoCloseable {
     if (!batch.isEmpty()) submitBatch(partition, batch);
 
     return seqNum;
+  }
+
+  static int selectPartition(String key, int roundRobinValue, int partitionCount) {
+    if (partitionCount <= 0) {
+      throw new IllegalArgumentException("partitionCount must be positive");
+    }
+    return key != null
+        ? FnvHash.partition(key, partitionCount)
+        : Math.floorMod(roundRobinValue, partitionCount);
   }
 
   public void flush() {
@@ -360,7 +375,17 @@ public class CursusProducer implements AutoCloseable {
                     return;
                   }
 
-                  if (ack.hasError()) log.warn("Batch error: {}", ack.getErrorMsg());
+                  if (ack.hasError()) {
+                    if (ProtocolDecoder.isTerminalProducerError(ack)) {
+                      closed.set(true);
+                      batchStates.remove(batchId);
+                      if (metrics != null) metrics.recordFailure(messages.size());
+                      log.error(
+                          "Producer fenced by terminal idempotency error: {}", ack.getErrorMsg());
+                      return;
+                    }
+                    log.warn("Batch error: {}", ack.getErrorMsg());
+                  }
                 } catch (TimeoutException e) {
                   log.warn("Batch send timeout on attempt {}", attempt + 1);
                 } catch (Exception e) {

@@ -54,6 +54,7 @@ public class CursusConsumer implements AutoCloseable {
   private final ScheduledExecutorService heartbeatScheduler;
   private final Map<Integer, PartitionConsumer> partitionConsumers = new ConcurrentHashMap<>();
   private final AtomicBoolean running = new AtomicBoolean(false);
+  private final AtomicBoolean rebalanceRequired = new AtomicBoolean(false);
   private final CompletableFuture<Void> doneFuture = new CompletableFuture<>();
 
   private volatile String memberId;
@@ -149,6 +150,15 @@ public class CursusConsumer implements AutoCloseable {
 
   public boolean isConnected() {
     return running.get() && connectionManager.isConnected();
+  }
+
+  void requestRebalance() {
+    rebalanceRequired.set(true);
+    stopPartitionConsumers();
+  }
+
+  boolean isRebalanceRequired() {
+    return rebalanceRequired.get();
   }
 
   @Override
@@ -281,6 +291,7 @@ public class CursusConsumer implements AutoCloseable {
 
   private void joinGroupAndConsume(Consumer<CursusMessage> handler) throws Exception {
     // Cancel any existing scheduled tasks before re-joining (I4 fix)
+    rebalanceRequired.set(false);
     cancelScheduledTasks();
     stopPartitionConsumers();
 
@@ -369,7 +380,9 @@ public class CursusConsumer implements AutoCloseable {
     while (running.get()) {
       // Check if any partition consumer signals rebalance
       boolean needsRebalance =
-          partitionConsumers.values().stream().anyMatch(PartitionConsumer::isRebalanceRequired);
+          rebalanceRequired.get()
+              || partitionConsumers.values().stream()
+                  .anyMatch(PartitionConsumer::isRebalanceRequired);
       if (needsRebalance) {
         log.info("Rebalance detected from partition consumer, rejoining group");
         if (metrics != null) metrics.recordRebalance();
@@ -443,9 +456,10 @@ public class CursusConsumer implements AutoCloseable {
           CommandBuilder.heartbeat(config.getTopic(), config.getGroupId(), memberId, generation);
       byte[] response = sendCoordinatorCommandSync(cmd);
       String result = new String(response, StandardCharsets.UTF_8);
-      if (ProtocolDecoder.isRebalanceRequired(result)) {
-        log.info("Rebalance required via heartbeat");
-        stopPartitionConsumers();
+      if (ProtocolDecoder.isRebalanceRequired(result)
+          || ProtocolDecoder.isCoordinatorFailure(result)) {
+        log.info("Rebalance required via heartbeat: {}", result);
+        requestRebalance();
       }
     } catch (Exception e) {
       log.warn("Heartbeat failed: {}", e.getMessage());
@@ -456,14 +470,14 @@ public class CursusConsumer implements AutoCloseable {
   private void commitAllOffsets() {
     if (!running.get() || partitionConsumers.isEmpty()) return;
 
-    // Build batch commit payload: <pid>:<offset>,<pid>:<offset>
+    // Build batch commit payload: P<partition>:<nextOffset>,P<partition>:<nextOffset>
     StringBuilder sb = new StringBuilder();
     boolean first = true;
     for (PartitionConsumer pc : partitionConsumers.values()) {
       long offset = pc.getCurrentOffset();
       if (offset > pc.getCommittedOffset()) {
         if (!first) sb.append(',');
-        sb.append(pc.getPartitionId()).append(':').append(offset);
+        sb.append('P').append(pc.getPartitionId()).append(':').append(offset);
         first = false;
       }
     }
@@ -477,24 +491,34 @@ public class CursusConsumer implements AutoCloseable {
       byte[] response = sendCoordinatorCommandSync(cmd);
       String result = new String(response, StandardCharsets.UTF_8);
       if (result.startsWith("OK")) {
-        // Update committed offsets on success
         for (PartitionConsumer pc : partitionConsumers.values()) {
           long offset = pc.getCurrentOffset();
           if (offset > pc.getCommittedOffset()) {
-            // Reflection-free: commitOffset will also set committedOffset
-            // but we track via the batch commit response
+            pc.markCommitted(offset);
           }
         }
         log.debug("Batch commit succeeded");
         if (metrics != null) metrics.recordCommit();
+      } else if (ProtocolDecoder.isOffsetRegression(result)) {
+        log.warn("Batch commit rejected offset regression: {}", result);
+        if (metrics != null) metrics.recordCommitFailure();
+      } else if (ProtocolDecoder.isCoordinatorFailure(result)) {
+        log.warn("Batch commit coordinator failure: {}", result);
+        requestRebalance();
+        if (metrics != null) metrics.recordCommitFailure();
       } else {
         log.warn("Batch commit response: {}", result);
+        if (metrics != null) metrics.recordCommitFailure();
       }
     } catch (Exception e) {
       log.warn("Batch commit failed: {}", e.getMessage());
       if (metrics != null) metrics.recordCommitFailure();
-      // Fall back to individual commits
+      // Fall back to individual commits. A partition-level coordinator failure will set its own
+      // rebalance flag and be picked up by the top-level loop.
       partitionConsumers.values().forEach(PartitionConsumer::commitOffset);
+      if (partitionConsumers.values().stream().anyMatch(PartitionConsumer::isRebalanceRequired)) {
+        requestRebalance();
+      }
     }
   }
 

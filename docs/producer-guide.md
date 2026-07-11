@@ -150,19 +150,19 @@ The `compressionType` string must exactly match the value returned by `algorithm
 
 ## Idempotent Delivery
 
-When `idempotent(true)` is set, the producer attaches a sequence number to each batch. The broker uses this to detect and discard duplicate batches, ensuring exactly-once delivery in the presence of retries.
+When `idempotent(true)` is set, the producer attaches a producer id, producer epoch, and per-partition sequence numbers to each batch. The broker uses these fields to detect duplicate batches and fence stale producer epochs during retries. This provides idempotent producer writes, not Kafka transaction-level exactly-once semantics across producer and consumer processing.
 
 ```java
 CursusProducerConfig config = CursusProducerConfig.builder()
         .brokers(List.of("localhost:9000"))
         .topic("payments")
         .partitions(4)
-        .acks(Acks.ALL)        // idempotent delivery works best with ALL acks
+        .acks(Acks.ALL)        // idempotent writes work best with ALL acks
         .idempotent(true)
         .build();
 ```
 
-When idempotent mode is on, `maxInflightRequests` should be 1 to preserve ordering per partition across retries. The default value of `5` is suitable when idempotent mode is off.
+When idempotent mode is on, sequence numbers start at 1 for a new `(producerId, epoch)` and advance independently per partition. `maxInflightRequests` should be 1 to preserve ordering per partition across retries. The default value of `5` is suitable when idempotent mode is off.
 
 ## Monitoring
 
@@ -197,7 +197,7 @@ Special broker responses trigger specific behavior:
 
 - **`NOT_LEADER`** — the current connection is not the partition leader. The producer clears the cached leader address and reconnects to the cluster, then retries.
 - **Timeout** (`writeTimeoutMs`) — the broker did not respond in time; the batch is retried.
-- **`ERROR:` prefix** — a hard broker error; the batch is still retried up to `maxRetries`, then logged as a permanent failure.
+- **`ERROR:` prefix** — a hard broker error; retry behavior depends on the error. Transient publish failures are retried up to `maxRetries`, then logged as permanent failures.
 
 After all retries are exhausted, the failure is logged at ERROR level and the batch is discarded. There is no dead-letter queue in the current version; implement a wrapper around `send()` if you need application-level error routing.
 
@@ -208,3 +208,5 @@ long seq = producer.send(payload);
 ```
 
 See [Configuration Reference](configuration-reference.md) for all producer properties.
+
+If the broker returns `ERROR: stale_producer_epoch ...`, `idempotency_gap`, `idempotency gap`, `idempotency error`, or a first-message sequence error, the producer treats the session as fenced or terminal and does not retry it as a normal transient publish failure. Recreate the producer to start a new idempotent session.

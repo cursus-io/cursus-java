@@ -19,6 +19,13 @@ public final class ProtocolDecoder {
 
   private ProtocolDecoder() {}
 
+  /** Broker-retention range returned with OFFSET_OUT_OF_RANGE responses. */
+  public record OffsetRange(long requested, long earliest, long latest) {}
+
+  /** UTF-8 STREAM_CONTROL frame sent on streaming connections before binary batch decoding. */
+  public record StreamControl(
+      String type, String reason, Long offset, Long requested, Long earliest, Long latest) {}
+
   public static AckResponse decodeAckResponse(byte[] data) {
     String json = new String(data, StandardCharsets.UTF_8).trim();
     return AckResponse.builder()
@@ -130,6 +137,100 @@ public final class ProtocolDecoder {
   public static boolean isRebalanceRequired(String response) {
     return response != null
         && (response.contains("REBALANCE_REQUIRED") || response.contains("GEN_MISMATCH"));
+  }
+
+  public static boolean isCoordinatorFailure(String response) {
+    return response != null
+        && (response.contains("GEN_MISMATCH")
+            || response.contains("NOT_OWNER")
+            || response.contains("member_not_found")
+            || response.contains("group_not_found")
+            || response.contains("NOT_COORDINATOR"));
+  }
+
+  public static boolean isTerminalProducerError(String response) {
+    if (response == null) return false;
+    String lower = response.toLowerCase();
+    return lower.contains("stale_producer_epoch")
+        || lower.contains("stale producer epoch")
+        || lower.contains("idempotency_gap")
+        || lower.contains("idempotency gap")
+        || lower.contains("idempotency error")
+        || lower.contains("first message")
+        || lower.contains("seqnum=1")
+        || lower.contains("seqnum 1")
+        || lower.contains("seq_num=1");
+  }
+
+  public static boolean isTerminalProducerError(AckResponse ack) {
+    return ack != null && isTerminalProducerError(ack.getErrorMsg());
+  }
+
+  public static boolean isStaleProducerEpoch(String response) {
+    return isTerminalProducerError(response);
+  }
+
+  public static boolean isStaleProducerEpoch(io.cursus.client.message.AckResponse ack) {
+    return isTerminalProducerError(ack);
+  }
+
+  public static boolean isOffsetRegression(String response) {
+    return response != null && response.trim().startsWith("ERROR: offset_regression");
+  }
+
+  public static boolean isOffsetOutOfRange(String response) {
+    return response != null && response.trim().startsWith("ERROR: OFFSET_OUT_OF_RANGE");
+  }
+
+  public static OffsetRange decodeOffsetOutOfRange(String response) {
+    Map<String, String> fields = decodeFields(response);
+    if (!fields.containsKey("requested")
+        || !fields.containsKey("earliest")
+        || !fields.containsKey("latest")) {
+      throw new CursusProtocolException("Missing offset range fields in response: " + response);
+    }
+    return new OffsetRange(
+        parseLongField(fields.get("requested"), "requested", response),
+        parseLongField(fields.get("earliest"), "earliest", response),
+        parseLongField(fields.get("latest"), "latest", response));
+  }
+
+  public static boolean isStreamControlFrame(byte[] data) {
+    if (data == null || data.length == 0) return false;
+    String response = new String(data, StandardCharsets.UTF_8).trim();
+    return response.startsWith("STREAM_CONTROL");
+  }
+
+  public static StreamControl decodeStreamControl(byte[] data) {
+    String response = new String(data, StandardCharsets.UTF_8).trim();
+    if (!response.startsWith("STREAM_CONTROL")) {
+      throw new CursusProtocolException("Unexpected stream control frame: " + response);
+    }
+    Map<String, String> fields = decodeFields(response);
+    return new StreamControl(
+        fields.getOrDefault("type", ""),
+        fields.getOrDefault("reason", ""),
+        parseOptionalLong(fields.get("offset"), "offset", response),
+        parseOptionalLong(fields.get("requested"), "requested", response),
+        parseOptionalLong(fields.get("earliest"), "earliest", response),
+        parseOptionalLong(fields.get("latest"), "latest", response));
+  }
+
+  private static Map<String, String> decodeFields(String response) {
+    String resp = response == null ? "" : response.trim();
+    Map<String, String> fields = new HashMap<>();
+    String[] parts = resp.split("\\s+");
+    for (int i = 1; i < parts.length; i++) {
+      int sep = parts[i].indexOf('=');
+      if (sep > 0) {
+        fields.put(parts[i].substring(0, sep), parts[i].substring(sep + 1));
+      }
+    }
+    return fields;
+  }
+
+  private static Long parseOptionalLong(String value, String field, String response) {
+    return value == null ? null : parseLongField(value, field, response);
   }
 
   private static long parseLongField(String value, String field, String response) {

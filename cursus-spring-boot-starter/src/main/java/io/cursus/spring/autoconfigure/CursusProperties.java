@@ -33,6 +33,7 @@ public class CursusProperties {
     private String topic;
     private String groupId;
     private String mode = "streaming";
+    private String autoOffsetReset = "earliest";
     private Duration autoCommitInterval = Duration.ofSeconds(5);
     private int maxPollRecords = 100;
     private long sessionTimeoutMs = 30000;

@@ -16,6 +16,7 @@ public class CursusConsumerConfig {
   private String topic;
   private String groupId;
   @Builder.Default private ConsumerMode consumerMode = ConsumerMode.STREAMING;
+  @Builder.Default private AutoOffsetReset autoOffsetReset = AutoOffsetReset.EARLIEST;
   @Builder.Default private Duration autoCommitInterval = Duration.ofSeconds(5);
   @Builder.Default private long sessionTimeoutMs = 30000;
   @Builder.Default private long heartbeatIntervalMs = 3000;

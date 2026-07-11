@@ -54,4 +54,16 @@ class PartitionBufferTest {
     assertThat(batch.get(0).getSeqNum()).isEqualTo(1);
     assertThat(batch.get(1).getSeqNum()).isEqualTo(2);
   }
+
+  @Test
+  void idempotentProducerIdentityIsStoredOnMessages() {
+    PartitionBuffer buffer = new PartitionBuffer(0, 10, 1000, "producer-1", 7);
+    buffer.add("a", "k1");
+
+    List<CursusMessage> batch = buffer.forceFlush();
+
+    assertThat(batch.get(0).getProducerId()).isEqualTo("producer-1");
+    assertThat(batch.get(0).getEpoch()).isEqualTo(7);
+    assertThat(batch.get(0).getSeqNum()).isEqualTo(1);
+  }
 }
