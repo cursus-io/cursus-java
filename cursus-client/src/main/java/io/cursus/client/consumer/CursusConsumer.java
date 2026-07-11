@@ -54,6 +54,7 @@ public class CursusConsumer implements AutoCloseable {
   private final ScheduledExecutorService heartbeatScheduler;
   private final Map<Integer, PartitionConsumer> partitionConsumers = new ConcurrentHashMap<>();
   private final AtomicBoolean running = new AtomicBoolean(false);
+  private final AtomicBoolean rebalanceRequired = new AtomicBoolean(false);
   private final CompletableFuture<Void> doneFuture = new CompletableFuture<>();
 
   private volatile String memberId;
@@ -281,6 +282,7 @@ public class CursusConsumer implements AutoCloseable {
 
   private void joinGroupAndConsume(Consumer<CursusMessage> handler) throws Exception {
     // Cancel any existing scheduled tasks before re-joining (I4 fix)
+    rebalanceRequired.set(false);
     cancelScheduledTasks();
     stopPartitionConsumers();
 
@@ -369,7 +371,9 @@ public class CursusConsumer implements AutoCloseable {
     while (running.get()) {
       // Check if any partition consumer signals rebalance
       boolean needsRebalance =
-          partitionConsumers.values().stream().anyMatch(PartitionConsumer::isRebalanceRequired);
+          rebalanceRequired.get()
+              || partitionConsumers.values().stream()
+                  .anyMatch(PartitionConsumer::isRebalanceRequired);
       if (needsRebalance) {
         log.info("Rebalance detected from partition consumer, rejoining group");
         if (metrics != null) metrics.recordRebalance();
@@ -443,8 +447,10 @@ public class CursusConsumer implements AutoCloseable {
           CommandBuilder.heartbeat(config.getTopic(), config.getGroupId(), memberId, generation);
       byte[] response = sendCoordinatorCommandSync(cmd);
       String result = new String(response, StandardCharsets.UTF_8);
-      if (ProtocolDecoder.isRebalanceRequired(result)) {
-        log.info("Rebalance required via heartbeat");
+      if (ProtocolDecoder.isRebalanceRequired(result)
+          || ProtocolDecoder.isCoordinatorFailure(result)) {
+        log.info("Rebalance required via heartbeat: {}", result);
+        rebalanceRequired.set(true);
         stopPartitionConsumers();
       }
     } catch (Exception e) {
@@ -490,6 +496,7 @@ public class CursusConsumer implements AutoCloseable {
         if (metrics != null) metrics.recordCommitFailure();
       } else if (ProtocolDecoder.isCoordinatorFailure(result)) {
         log.warn("Batch commit coordinator failure: {}", result);
+        rebalanceRequired.set(true);
         stopPartitionConsumers();
         if (metrics != null) metrics.recordCommitFailure();
       } else {
@@ -499,8 +506,12 @@ public class CursusConsumer implements AutoCloseable {
     } catch (Exception e) {
       log.warn("Batch commit failed: {}", e.getMessage());
       if (metrics != null) metrics.recordCommitFailure();
-      // Fall back to individual commits
+      // Fall back to individual commits. A partition-level coordinator failure will set its own
+      // rebalance flag and be picked up by the top-level loop.
       partitionConsumers.values().forEach(PartitionConsumer::commitOffset);
+      if (partitionConsumers.values().stream().anyMatch(PartitionConsumer::isRebalanceRequired)) {
+        rebalanceRequired.set(true);
+      }
     }
   }
 
