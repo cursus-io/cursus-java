@@ -17,6 +17,7 @@ public class CursusConsumerConfig {
   private String groupId;
   @Builder.Default private ConsumerMode consumerMode = ConsumerMode.STREAMING;
   @Builder.Default private AutoOffsetReset autoOffsetReset = AutoOffsetReset.EARLIEST;
+  @Builder.Default private IsolationLevel isolationLevel = IsolationLevel.READ_UNCOMMITTED;
   @Builder.Default private Duration autoCommitInterval = Duration.ofSeconds(5);
   @Builder.Default private long sessionTimeoutMs = 30000;
   @Builder.Default private long heartbeatIntervalMs = 3000;
@@ -27,6 +28,9 @@ public class CursusConsumerConfig {
   @Builder.Default private long commitIntervalMs = 5000;
   private String tlsCertPath;
   private String tlsKeyPath;
+  private String principal;
+  private String authToken;
+  @Builder.Default private long commandTimeoutMs = 5000;
   @Builder.Default private int maxRetries = 3;
   @Builder.Default private long maxBackoffMs = 10000;
   @Builder.Default private long metadataRefreshIntervalMs = 30000;

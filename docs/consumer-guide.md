@@ -183,8 +183,25 @@ The `immediateCommit` flag (default `false`) is reserved for future use. When se
 
 ### At-least-once delivery
 
-Commits happen after the handler processes records. If the consumer process crashes between receiving a message and the next scheduled commit, those messages will be redelivered. Design your message handler to be idempotent, or use the `offset` field to deduplicate on the consumer side. Committing before processing gives at-most-once behavior and can skip records after a crash. Cursus does not yet provide Kafka transaction-level exactly-once semantics. Lower offset commits are rejected by the broker as `offset_regression`; the SDK treats that as a failed commit and does not rewind local committed state. Coordinator failures such as `GEN_MISMATCH`, `NOT_OWNER`, `member_not_found`, `group_not_found`, and `NOT_COORDINATOR` cause the consumer to fail closed or rejoin according to the current group state.
+Commits happen after the handler processes records. If the consumer process crashes between receiving a message and the next scheduled commit, those messages will be redelivered. Design your message handler to be idempotent, or use the `offset` field to deduplicate on the consumer side. Committing before processing gives at-most-once behavior and can skip records after a crash. Cursus does not yet provide full external side-effect exactly-once semantics. Lower offset commits are rejected by the broker as `offset_regression`; the SDK treats that as a failed commit and does not rewind local committed state. Coordinator failures such as `GEN_MISMATCH`, `NOT_OWNER`, `member_not_found`, `group_not_found`, and `NOT_COORDINATOR` cause the consumer to fail closed or rejoin according to the current group state.
 
+
+## Read Isolation
+
+Consumers default to `IsolationLevel.READ_UNCOMMITTED`, which delivers non-transactional records and committed transactional records as soon as the broker exposes them. Set `isolationLevel(IsolationLevel.READ_COMMITTED)` when the consumer must skip aborted records and hold open transaction records until the broker marks them committed.
+
+```java
+import io.cursus.client.config.IsolationLevel;
+
+CursusConsumerConfig config = CursusConsumerConfig.builder()
+        .brokers(List.of("localhost:9000"))
+        .topic("orders")
+        .groupId("order-processors")
+        .isolationLevel(IsolationLevel.READ_COMMITTED)
+        .build();
+```
+
+Non-transactional records are delivered under both isolation levels. Transactional processing only covers broker-managed staged records and consumer offsets; external database or API effects must remain idempotent in the application.
 ## Shutdown
 
 Call `consumer.close()` to shut down gracefully. This:

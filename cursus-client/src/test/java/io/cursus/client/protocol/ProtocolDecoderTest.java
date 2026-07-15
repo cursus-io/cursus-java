@@ -3,6 +3,8 @@ package io.cursus.client.protocol;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
+import io.cursus.client.exception.CursusAuthorizationException;
+import io.cursus.client.exception.CursusProducerFencedException;
 import io.cursus.client.message.AckResponse;
 import io.cursus.client.message.CursusMessage;
 import java.nio.charset.StandardCharsets;
@@ -201,5 +203,49 @@ class ProtocolDecoderTest {
     assertThatThrownBy(
             () -> ProtocolDecoder.decodeSnapshotResponse("{\"version\":1,\"payload\":\"x\"}"))
         .hasMessageContaining("Unexpected snapshot response");
+  }
+
+  @Test
+  void decodeListOffsetsResponse() {
+    var ranges =
+        ProtocolDecoder.decodeListOffsetsResponse(
+            "OK topic=orders partitions=2 "
+                + "offsets=P0:earliest=0:latest=11:leo=12:hwm=11,P1:earliest=5:latest=21:leo=22:hwm=21");
+
+    assertThat(ranges).hasSize(2);
+    assertThat(ranges.get(0).partition()).isEqualTo(0);
+    assertThat(ranges.get(0).latest()).isEqualTo(11);
+    assertThat(ranges.get(1).partition()).isEqualTo(1);
+  }
+
+  @Test
+  void structuredErrorsAreTyped() {
+    RuntimeException auth =
+        ProtocolDecoder.errorFromResponse(
+            "ERROR: NOT_AUTHORIZED_FOR_TOPIC topic=orders operation=write");
+    RuntimeException fenced =
+        ProtocolDecoder.errorFromResponse(
+            "ERROR: producer_fenced current_epoch=2 requested_epoch=1");
+
+    assertThat(auth).isInstanceOf(CursusAuthorizationException.class);
+    assertThat(fenced).isInstanceOf(CursusProducerFencedException.class);
+    assertThat(
+            ProtocolDecoder.decodeNotCoordinator("ERROR: NOT_COORDINATOR host=127.0.0.1 port=9002"))
+        .isEqualTo("127.0.0.1:9002");
+  }
+
+  @Test
+  void decodeTransactionResponses() {
+    ProtocolDecoder.ProducerSession session =
+        ProtocolDecoder.decodeProducerSession("OK transactional_id=tx producerId=p1 epoch=3");
+    assertThat(session.transactionalId()).isEqualTo("tx");
+    assertThat(session.producerId()).isEqualTo("p1");
+    assertThat(session.epoch()).isEqualTo(3);
+
+    ProtocolDecoder.TransactionStatus status =
+        ProtocolDecoder.decodeTransactionStatus(
+            "OK transactional_id=tx state=committed messages=2 offsets=1");
+    assertThat(status.state()).isEqualTo("committed");
+    assertThat(status.messages()).isEqualTo(2);
   }
 }

@@ -37,6 +37,10 @@ Build with `CursusConsumerConfig.builder()`. `topic` is required; `groupId` is r
 | `groupId` | `String` | `null` | Consumer group identifier. Required for partition assignment via JOIN_GROUP / SYNC_GROUP. |
 | `consumerMode` | `ConsumerMode` | `STREAMING` | `STREAMING` — broker pushes messages over a persistent connection. `POLLING` — consumer polls with `CONSUME` commands. |
 | `autoOffsetReset` | `AutoOffsetReset` | `EARLIEST` | Retention gap policy: `EARLIEST`, `LATEST`, or `ERROR`. |
+| `isolationLevel` | `IsolationLevel` | `READ_UNCOMMITTED` | `READ_COMMITTED` skips aborted/open transactional records; `READ_UNCOMMITTED` delivers available records. |
+| `principal` | `String` | `null` | Optional authenticated principal sent on read and stream commands. |
+| `authToken` | `String` | `null` | Optional authorization token sent on read and stream commands. |
+| `commandTimeoutMs` | `long` | `5000` | Timeout for coordinator and transaction command responses. |
 | `autoCommitInterval` | `Duration` | `5s` | How often the consumer commits the next offset to read to the broker. |
 | `sessionTimeoutMs` | `long` | `30000` | Maximum time in milliseconds the broker waits for a heartbeat before considering the consumer dead. |
 | `heartbeatIntervalMs` | `long` | `3000` | Interval in milliseconds between heartbeat sends. Should be well below `sessionTimeoutMs`. |

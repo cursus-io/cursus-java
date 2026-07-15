@@ -85,4 +85,40 @@ class CommandBuilderTest {
   void subscribe() {
     assertThat(CommandBuilder.subscribe("t", "g")).isEqualTo("SUBSCRIBE topic=t group=g");
   }
+
+  @Test
+  void consumeWithIsolationAndAuth() {
+    assertThat(
+            CommandBuilder.consume("t", 0, 10, "g", 2, "m1", "read_committed", "alice", "secret"))
+        .isEqualTo(
+            "CONSUME topic=t partition=0 offset=10 group=g generation=2 member=m1 "
+                + "isolation_level=read_committed principal=alice auth_token=secret");
+  }
+
+  @Test
+  void listOffsetsAndTransactionCommands() {
+    assertThat(CommandBuilder.listOffsets("orders", 1, "alice", "secret"))
+        .isEqualTo("LIST_OFFSETS topic=orders partition=1 principal=alice auth_token=secret");
+    assertThat(CommandBuilder.findTransactionCoordinator("tx-1"))
+        .isEqualTo("FIND_COORDINATOR transactional_id=tx-1");
+    assertThat(CommandBuilder.initProducerId("tx-1"))
+        .isEqualTo("INIT_PRODUCER_ID transactional_id=tx-1");
+    assertThat(CommandBuilder.beginTxn("tx-1", "p1", 2))
+        .isEqualTo("BEGIN_TXN transactional_id=tx-1 producerId=p1 epoch=2");
+    assertThat(
+            CommandBuilder.txnPublish(
+                "tx-1", "out", -1, "p1", 3, 2, "processed", "k1", "alice", "secret"))
+        .isEqualTo(
+            "TXN_PUBLISH transactional_id=tx-1 topic=out partition=-1 producerId=p1 "
+                + "seqNum=3 epoch=2 key=k1 message=processed principal=alice auth_token=secret");
+    assertThat(
+            CommandBuilder.sendOffsetsToTxn(
+                "tx-1", "p1", 2, "input", "grp", "m1", 4, "P0:101,P2:202"))
+        .isEqualTo(
+            "SEND_OFFSETS_TO_TXN transactional_id=tx-1 producerId=p1 epoch=2 topic=input "
+                + "group=grp member=m1 generation=4 P0:101,P2:202");
+    assertThat(CommandBuilder.endTxn("tx-1", "p1", 2, false))
+        .isEqualTo("END_TXN transactional_id=tx-1 producerId=p1 epoch=2 result=abort");
+    assertThat(CommandBuilder.txnStatus("tx-1")).isEqualTo("TXN_STATUS transactional_id=tx-1");
+  }
 }

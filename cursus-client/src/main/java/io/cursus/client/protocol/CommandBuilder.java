@@ -1,9 +1,6 @@
 package io.cursus.client.protocol;
 
-/**
- * Builds text-based Cursus protocol commands using key=value format. These commands are sent as
- * UTF-8 strings over the length-prefixed TCP connection. Matches the Go SDK's wire protocol.
- */
+/** Builds text-based Cursus protocol commands using key=value format. */
 public final class CommandBuilder {
 
   private CommandBuilder() {}
@@ -56,34 +53,70 @@ public final class CommandBuilder {
 
   public static String consume(
       String topic, int partition, long offset, String group, int generation, String member) {
-    return "CONSUME topic="
-        + topic
-        + " partition="
-        + partition
-        + " offset="
-        + offset
-        + " group="
-        + group
-        + " generation="
-        + generation
-        + " member="
-        + member;
+    return consume(topic, partition, offset, group, generation, member, null, null, null);
+  }
+
+  public static String consume(
+      String topic,
+      int partition,
+      long offset,
+      String group,
+      int generation,
+      String member,
+      String isolationLevel,
+      String principal,
+      String authToken) {
+    String command =
+        "CONSUME topic="
+            + topic
+            + " partition="
+            + partition
+            + " offset="
+            + offset
+            + " group="
+            + group
+            + " generation="
+            + generation
+            + " member="
+            + member;
+    if (isolationLevel != null && !isolationLevel.isBlank()) {
+      command += " isolation_level=" + isolationLevel;
+    }
+    return appendAuth(command, principal, authToken);
   }
 
   public static String stream(
       String topic, int partition, String group, long offset, int generation, String member) {
-    return "STREAM topic="
-        + topic
-        + " partition="
-        + partition
-        + " group="
-        + group
-        + " offset="
-        + offset
-        + " generation="
-        + generation
-        + " member="
-        + member;
+    return stream(topic, partition, group, offset, generation, member, null, null, null);
+  }
+
+  public static String stream(
+      String topic,
+      int partition,
+      String group,
+      long offset,
+      int generation,
+      String member,
+      String isolationLevel,
+      String principal,
+      String authToken) {
+    String command =
+        "STREAM topic="
+            + topic
+            + " partition="
+            + partition
+            + " group="
+            + group
+            + " offset="
+            + offset
+            + " generation="
+            + generation
+            + " member="
+            + member;
+    if (isolationLevel != null && !isolationLevel.isBlank()) {
+      command += " isolation_level=" + isolationLevel;
+    }
+    return appendAuth(command, principal, authToken);
   }
 
   public static String batchCommit(
@@ -128,7 +161,121 @@ public final class CommandBuilder {
     return "FIND_COORDINATOR group=" + group;
   }
 
+  public static String findTransactionCoordinator(String transactionalId) {
+    return "FIND_COORDINATOR transactional_id=" + transactionalId;
+  }
+
+  public static String listOffsets(String topic) {
+    return listOffsets(topic, null, null, null);
+  }
+
+  public static String listOffsets(
+      String topic, Integer partition, String principal, String authToken) {
+    String command = "LIST_OFFSETS topic=" + topic;
+    if (partition != null) {
+      command += " partition=" + partition;
+    }
+    return appendAuth(command, principal, authToken);
+  }
+
+  public static String initProducerId(String transactionalId) {
+    return "INIT_PRODUCER_ID transactional_id=" + transactionalId;
+  }
+
+  public static String beginTxn(String transactionalId, String producerId, long epoch) {
+    return "BEGIN_TXN transactional_id="
+        + transactionalId
+        + " producerId="
+        + producerId
+        + " epoch="
+        + epoch;
+  }
+
+  public static String txnPublish(
+      String transactionalId,
+      String topic,
+      int partition,
+      String producerId,
+      long seqNum,
+      long epoch,
+      String message,
+      String key,
+      String principal,
+      String authToken) {
+    String command =
+        "TXN_PUBLISH transactional_id="
+            + transactionalId
+            + " topic="
+            + topic
+            + " partition="
+            + partition
+            + " producerId="
+            + producerId
+            + " seqNum="
+            + seqNum
+            + " epoch="
+            + epoch;
+    if (key != null && !key.isBlank()) {
+      command += " key=" + key;
+    }
+    command += " message=" + message;
+    return appendAuth(command, principal, authToken);
+  }
+
+  public static String sendOffsetsToTxn(
+      String transactionalId,
+      String producerId,
+      long epoch,
+      String topic,
+      String group,
+      String member,
+      int generation,
+      String offsets) {
+    return "SEND_OFFSETS_TO_TXN transactional_id="
+        + transactionalId
+        + " producerId="
+        + producerId
+        + " epoch="
+        + epoch
+        + " topic="
+        + topic
+        + " group="
+        + group
+        + " member="
+        + member
+        + " generation="
+        + generation
+        + " "
+        + offsets;
+  }
+
+  public static String endTxn(
+      String transactionalId, String producerId, long epoch, boolean commit) {
+    return "END_TXN transactional_id="
+        + transactionalId
+        + " producerId="
+        + producerId
+        + " epoch="
+        + epoch
+        + " result="
+        + (commit ? "commit" : "abort");
+  }
+
+  public static String txnStatus(String transactionalId) {
+    return "TXN_STATUS transactional_id=" + transactionalId;
+  }
+
   public static String metadata(String topic) {
     return "METADATA topic=" + topic;
+  }
+
+  private static String appendAuth(String command, String principal, String authToken) {
+    if (principal != null && !principal.isBlank()) {
+      command += " principal=" + principal;
+    }
+    if (authToken != null && !authToken.isBlank()) {
+      command += " auth_token=" + authToken;
+    }
+    return command;
   }
 }

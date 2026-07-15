@@ -1,6 +1,6 @@
 # Protocol
 
-This document describes the wire protocol used between the Java client and the Cursus broker. The Java implementation mirrors the Go SDK's `protocol.go`.
+This document describes the wire protocol used between the Java client and the Cursus broker. The Java implementation follows the broker text command and framed batch contracts used by the other Cursus SDKs.
 
 ## Transport
 
@@ -57,8 +57,15 @@ Text commands are UTF-8 strings. Fields are separated by a single space. The ent
 | `BATCH_COMMIT` | `BATCH_COMMIT topic=<topic> group=<group> member=<member> generation=<G> P<partition>:<nextOffset>,...` | Commit next offsets for multiple partitions in one round-trip |
 | `SYNC_GROUP` | `SYNC_GROUP topic=<topic> group=<group> member=<member> generation=<G>` | Fetch partition assignment after joining a group |
 | `FETCH_OFFSET` | `FETCH_OFFSET topic=<topic> partition=<P> group=<group>` | Fetch broker-committed next offset before consuming an assigned partition |
-| `FIND_COORDINATOR` | `FIND_COORDINATOR group=<group>` | Resolve the current coordinator for a consumer group |
+| `LIST_OFFSETS` | `LIST_OFFSETS topic=<topic> [partition=<P>]` | Discover retained offset ranges and next readable committed offsets |
+| `FIND_COORDINATOR` | `FIND_COORDINATOR group=<group>` or `FIND_COORDINATOR transactional_id=<id>` | Resolve the current coordinator for a consumer group or transaction |
 | `METADATA` | `METADATA topic=<topic>` | Fetch cluster metadata, including partition leaders |
+| `INIT_PRODUCER_ID` | `INIT_PRODUCER_ID transactional_id=<id>` | Initialize a producer id and epoch for transactional publishing |
+| `BEGIN_TXN` | `BEGIN_TXN transactional_id=<id> producerId=<id> epoch=<N>` | Start a broker-managed transaction |
+| `TXN_PUBLISH` | `TXN_PUBLISH transactional_id=<id> topic=<topic> partition=<P|-1> producerId=<id> seqNum=<N> epoch=<N> message=<payload>` | Stage a record in the transaction |
+| `SEND_OFFSETS_TO_TXN` | `SEND_OFFSETS_TO_TXN transactional_id=<id> producerId=<id> epoch=<N> topic=<topic> group=<group> member=<member> generation=<N> P<partition>:<nextOffset>,...` | Stage consumed offsets in the transaction |
+| `END_TXN` | `END_TXN transactional_id=<id> producerId=<id> epoch=<N> result=<commit|abort>` | Commit or abort staged records and offsets |
+| `TXN_STATUS` | `TXN_STATUS transactional_id=<id>` | Fetch transaction coordinator state |
 
 ### Command Routing
 
@@ -91,6 +98,17 @@ BATCH_COMMIT topic=orders group=workers member=m-1 generation=7 P0:11,P1:21
 Lower offset commits are rejected by the broker as `ERROR: offset_regression ...`; the SDK treats that as a failed commit and does not rewind local committed state. Coordinator errors such as `GEN_MISMATCH`, `NOT_OWNER`, `member_not_found`, `group_not_found`, and `NOT_COORDINATOR` cause the consumer to re-resolve or rejoin.
 
 For retention gaps, pull consumers handle `ERROR: OFFSET_OUT_OF_RANGE requested=<N> earliest=<N> latest=<N>`, and streaming consumers handle `STREAM_CONTROL type=CLOSE reason=offset_out_of_range ...`. Zero-length stream frames are keepalives.
+
+
+## Offset Discovery
+
+`OffsetClient.listOffsets(topic)` and `listOffsets(topic, partition)` use `LIST_OFFSETS` and require a structured success response:
+
+```text
+OK topic=orders partitions=2 offsets=P0:earliest=0:latest=101:leo=101:hwm=101,P1:earliest=5:latest=44:leo=44:hwm=44
+```
+
+`latest` is the next readable committed offset, not the last stored record offset. `ERROR:` responses are mapped to typed broker exceptions; malformed success responses are rejected instead of guessed.
 
 ## Batch Message Encoding
 
@@ -161,7 +179,7 @@ After processing a batch, the broker returns a JSON response as a UTF-8 string (
 | `leader` | `string` | Current leader address; used by the client to update its cached leader |
 | `error` | `string` | Error message when `status` is not `"OK"`; empty string otherwise |
 
-Special text responses (not JSON) the client also handles:
+Text responses are accepted as successful only when they are exactly `OK` or start with `OK `. Structured `ERROR: <code> key=value ...` responses are parsed into broker exceptions. Special text responses (not JSON) the client also handles:
 
 | Response text | Meaning |
 |---|---|
@@ -171,6 +189,21 @@ Special text responses (not JSON) the client also handles:
 | Starts with `ERROR: offset_regression` | Commit failed because it would move the broker committed offset backward |
 | Starts with `ERROR: OFFSET_OUT_OF_RANGE` | Requested consume offset is outside the retained range; `autoOffsetReset` decides earliest/latest/error |
 | Starts with `ERROR:` | Hard broker error; the prefix is followed by an error description |
+
+
+## Transaction Coordinator
+
+Transaction commands are coordinator-owned and route through `FIND_COORDINATOR transactional_id=<id>`. If a coordinator command returns `ERROR: NOT_COORDINATOR host=<host> port=<port>`, the SDK retries the same command against the redirected broker with a bounded retry count.
+
+```text
+INIT_PRODUCER_ID transactional_id=orders-worker
+BEGIN_TXN transactional_id=orders-worker producerId=p-1 epoch=1
+TXN_PUBLISH transactional_id=orders-worker topic=processed-orders partition=-1 producerId=p-1 seqNum=1 epoch=1 message=processed
+SEND_OFFSETS_TO_TXN transactional_id=orders-worker producerId=p-1 epoch=1 topic=orders group=order-workers member=m-1 generation=7 P0:101
+END_TXN transactional_id=orders-worker producerId=p-1 epoch=1 result=commit
+```
+
+Successful transaction commit applies staged records and staged offsets inside the broker. Abort discards them. Offset regression during commit is a transaction failure and does not update local committed offset state. Authorization failures and stale producer epoch fencing are terminal for the current producer session.
 
 ## Compression
 

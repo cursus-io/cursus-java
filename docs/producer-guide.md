@@ -150,7 +150,7 @@ The `compressionType` string must exactly match the value returned by `algorithm
 
 ## Idempotent Delivery
 
-When `idempotent(true)` is set, the producer attaches a producer id, producer epoch, and per-partition sequence numbers to each batch. The broker uses these fields to detect duplicate batches and fence stale producer epochs during retries. This provides idempotent producer writes, not Kafka transaction-level exactly-once semantics across producer and consumer processing.
+When `idempotent(true)` is set, the producer attaches a producer id, producer epoch, and per-partition sequence numbers to each batch. The broker uses these fields to detect duplicate batches and fence stale producer epochs during retries. This provides idempotent producer writes, not full external side-effect exactly-once semantics across producer and consumer processing.
 
 ```java
 CursusProducerConfig config = CursusProducerConfig.builder()
@@ -164,6 +164,29 @@ CursusProducerConfig config = CursusProducerConfig.builder()
 
 When idempotent mode is on, sequence numbers start at 1 for a new `(producerId, epoch)` and advance independently per partition. `maxInflightRequests` should be 1 to preserve ordering per partition across retries. The default value of `5` is suitable when idempotent mode is off.
 
+
+## Transactions
+
+`TransactionalProducer` wraps the broker transaction coordinator commands. A successful commit applies staged output records and staged consumer offsets inside the broker. An abort discards the staged records and offsets. This is a broker-managed record-plus-offset transaction; it does not make external database or API side effects atomic.
+
+```java
+import io.cursus.client.transaction.TransactionalProducer;
+import java.util.List;
+import java.util.Map;
+
+try (TransactionalProducer producer =
+        new TransactionalProducer(List.of("localhost:9000"), "orders-worker")) {
+    producer.begin();
+    producer.publish("processed-orders", -1, "processed payload");
+    producer.sendOffsets("orders", "order-workers", "member-1", 7, Map.of(0, 101L));
+    producer.commit();
+} catch (RuntimeException error) {
+    // Recreate the transactional producer after producer fencing or authorization failures.
+    throw error;
+}
+```
+
+`publish(topic, -1, payload)` lets the broker select the target partition. `sendOffsets(...)` sorts partition offsets before building the wire command, so the broker receives `P0:<nextOffset>,P1:<nextOffset>` in stable order. Commit and abort calls are retryable for transient coordinator movement; stale producer epochs are surfaced as terminal producer fencing errors.
 ## Monitoring
 
 **Total acknowledged message count:**
