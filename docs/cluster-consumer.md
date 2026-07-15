@@ -4,7 +4,7 @@ FindCoordinator-based routing architecture for consuming messages in a clustered
 
 ## Overview
 
-Following the same pattern as Kafka, consumer group commands are routed to the coordinator broker while data commands are routed to the partition leader.
+Consumer group commands are routed to the coordinator broker while data commands are routed to the partition leader.
 
 ## Command Routing
 

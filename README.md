@@ -4,9 +4,10 @@ Java client library for the [Cursus](https://github.com/cursus-io/cursus) messag
 
 ## Features
 
-- **Producer** — Partition batching, gzip compression, idempotent writes, configurable linger time
+- **Producer** — Partition batching, gzip compression, idempotent writes, transactional publishing, configurable linger time
 - **Consumer** — Polling and streaming modes, consumer groups with modulo-based partition assignment
 - **Consumer Groups** — Automatic join/sync/leave lifecycle with heartbeating and rebalance handling
+- **Offset Discovery** — Broker offset range lookup for retention-aware consumers
 - **Spring Boot Starter** — Zero-boilerplate auto-configuration and `@CursusListener` annotation
 - **Virtual Threads** — Automatically uses `Executors.newVirtualThreadPerTaskExecutor()` on Java 21+, falls back to a fixed thread pool on Java 17–20
 
@@ -44,6 +45,8 @@ Verify the dependency resolves and the public API imports:
 import io.cursus.client.producer.CursusProducer;
 import io.cursus.client.consumer.CursusConsumer;
 import io.cursus.client.eventstore.CursusEventStore;
+import io.cursus.client.offset.OffsetClient;
+import io.cursus.client.transaction.TransactionalProducer;
 ```
 
 **With Spring Boot**
@@ -138,6 +141,30 @@ CursusProducerConfig producerConfig = CursusProducerConfig.builder()
 
 CursusEventStore events = new CursusEventStore(brokers, "orders-es", "orders");
 ```
+
+### Offset discovery and transactions
+
+```java
+import io.cursus.client.offset.OffsetClient;
+import io.cursus.client.protocol.ProtocolDecoder.PartitionOffsetRange;
+import io.cursus.client.transaction.TransactionalProducer;
+import java.util.List;
+import java.util.Map;
+
+try (OffsetClient offsets = new OffsetClient(List.of("localhost:9000"))) {
+    Map<Integer, PartitionOffsetRange> ranges = offsets.listOffsets("orders");
+    System.out.println("next readable committed offset for P0=" + ranges.get(0).latest());
+}
+
+try (TransactionalProducer producer =
+        new TransactionalProducer(List.of("localhost:9000"), "orders-worker")) {
+    producer.begin();
+    producer.publish("orders-output", 0, "processed-order");
+    producer.sendOffsets("orders-input", "orders-group", "member-1", 3, Map.of(0, 101L));
+    producer.commit();
+}
+```
+
 
 ### Spring Boot — application.yml + @CursusListener
 

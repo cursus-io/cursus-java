@@ -184,7 +184,15 @@ public class PartitionConsumer {
       try {
         String command =
             CommandBuilder.consume(
-                config.getTopic(), partitionId, currentOffset.get(), group, generation, member);
+                config.getTopic(),
+                partitionId,
+                currentOffset.get(),
+                group,
+                generation,
+                member,
+                config.getIsolationLevel().wireValue(),
+                config.getPrincipal(),
+                config.getAuthToken());
         String consumeTarget =
             partitionLeaderAddr != null ? partitionLeaderAddr : config.getBrokers().get(0);
         byte[] responseBytes = sendPlainCommand(consumeTarget, command);
@@ -326,7 +334,10 @@ public class PartitionConsumer {
                       group,
                       currentOffset.get(),
                       generation,
-                      member);
+                      member,
+                      config.getIsolationLevel().wireValue(),
+                      config.getPrincipal(),
+                      config.getAuthToken());
               connectionManager.sendCommandOnPartitionOneWay(partitionId, restream);
             }
             continue;
