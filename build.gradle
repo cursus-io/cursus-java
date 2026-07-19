@@ -104,8 +104,8 @@ subprojects {
         testImplementation "org.junit.jupiter:junit-jupiter:${junitVersion}"
         testRuntimeOnly 'org.junit.platform:junit-platform-launcher'
 
-        compileOnly 'com.github.spotbugs:spotbugs-annotations:4.10.2'
-        testCompileOnly 'com.github.spotbugs:spotbugs-annotations:4.10.2'
+        compileOnly 'com.github.spotbugs:spotbugs-annotations:4.10.3'
+        testCompileOnly 'com.github.spotbugs:spotbugs-annotations:4.10.3'
     }
 
     test {
