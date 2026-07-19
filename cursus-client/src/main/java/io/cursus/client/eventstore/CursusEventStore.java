@@ -149,7 +149,7 @@ public class CursusEventStore implements AutoCloseable {
         || text.contains("leader_not_available");
   }
 
-  public void createTopic(int partitions) {
+  public synchronized void createTopic(int partitions) {
     try {
       String resp =
           sendCommand(
@@ -171,7 +171,7 @@ public class CursusEventStore implements AutoCloseable {
     }
   }
 
-  public AppendResult append(String key, long expectedVersion, Event event) {
+  public synchronized AppendResult append(String key, long expectedVersion, Event event) {
     try {
       int sv = event.getSchemaVersion() > 0 ? event.getSchemaVersion() : 1;
       StringBuilder cmd = new StringBuilder();
@@ -228,11 +228,11 @@ public class CursusEventStore implements AutoCloseable {
     return new AppendResult(version, offset, partition);
   }
 
-  public StreamData readStream(String key) {
+  public synchronized StreamData readStream(String key) {
     return readStream(key, 0);
   }
 
-  public StreamData readStream(String key, long fromVersion) {
+  public synchronized StreamData readStream(String key, long fromVersion) {
     String cmd = "READ_STREAM topic=" + topic + " key=" + key;
     if (fromVersion > 0) cmd += " from_version=" + fromVersion;
 
@@ -315,7 +315,7 @@ public class CursusEventStore implements AutoCloseable {
     return new StreamData(snapshot, events);
   }
 
-  public void saveSnapshot(String key, long version, String payload) {
+  public synchronized void saveSnapshot(String key, long version, String payload) {
     try {
       String resp =
           sendCommand(
@@ -341,7 +341,7 @@ public class CursusEventStore implements AutoCloseable {
     }
   }
 
-  public Snapshot readSnapshot(String key) {
+  public synchronized Snapshot readSnapshot(String key) {
     try {
       String resp = sendCommand("READ_SNAPSHOT topic=" + topic + " key=" + key);
       String snapshotJson = ProtocolDecoder.decodeSnapshotResponse(resp);
@@ -356,7 +356,7 @@ public class CursusEventStore implements AutoCloseable {
     }
   }
 
-  public long streamVersion(String key) {
+  public synchronized long streamVersion(String key) {
     try {
       String resp = sendCommand("STREAM_VERSION topic=" + topic + " key=" + key);
       return ProtocolDecoder.decodeVersionResponse(resp);
@@ -380,7 +380,7 @@ public class CursusEventStore implements AutoCloseable {
   }
 
   @Override
-  public void close() {
+  public synchronized void close() {
     resetSocket();
   }
 }
