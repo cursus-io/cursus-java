@@ -20,5 +20,14 @@ public class CursusMessage {
   private long schemaVersion;
   private long aggregateVersion;
   private String metadata;
+  private long timestamp;
+  private String transactionalId;
+  private String transactionState;
+  private String transactionMarker;
+  private String controlBatchType;
+  private int controlBatchVersion;
+  private long controlBatchCoordinatorEpoch;
+  private byte[] controlBatchKey;
+  private byte[] controlBatchValue;
   private int retryCount;
 }

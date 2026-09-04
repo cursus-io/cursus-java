@@ -77,7 +77,13 @@ public class CursusConsumer implements AutoCloseable {
     this.consumerId = UUID.randomUUID().toString();
     this.connectionManager =
         new ConnectionManager(
-            config.getBrokers(), config.getTlsCertPath(), config.getTlsKeyPath(), 30000);
+            config.getBrokers(),
+            config.getTlsCertPath(),
+            config.getTlsKeyPath(),
+            30000,
+            config.getCompressionType(),
+            config.getPrincipal(),
+            config.getAuthToken());
     this.workerExecutor =
         ExecutorFactory.create(Runtime.getRuntime().availableProcessors(), "cursus-consumer");
     this.commitScheduler =
@@ -236,36 +242,7 @@ public class CursusConsumer implements AutoCloseable {
   }
 
   private byte[] sendPlainSocket(String addr, String command) throws Exception {
-    String[] parts = addr.split(":");
-    String host = parts[0];
-    int port = Integer.parseInt(parts[1]);
-
-    try (java.net.Socket socket = new java.net.Socket(host, port)) {
-      socket.setSoTimeout(5000);
-      java.io.OutputStream out = socket.getOutputStream();
-      java.io.InputStream in = socket.getInputStream();
-
-      byte[] cmdBytes = command.getBytes(StandardCharsets.UTF_8);
-      byte[] payload = new byte[2 + cmdBytes.length];
-      System.arraycopy(cmdBytes, 0, payload, 2, cmdBytes.length);
-
-      byte[] frame = new byte[4 + payload.length];
-      frame[0] = (byte) (payload.length >> 24);
-      frame[1] = (byte) (payload.length >> 16);
-      frame[2] = (byte) (payload.length >> 8);
-      frame[3] = (byte) (payload.length);
-      System.arraycopy(payload, 0, frame, 4, payload.length);
-      out.write(frame);
-      out.flush();
-
-      byte[] lenBuf = in.readNBytes(4);
-      int respLen =
-          ((lenBuf[0] & 0xFF) << 24)
-              | ((lenBuf[1] & 0xFF) << 16)
-              | ((lenBuf[2] & 0xFF) << 8)
-              | (lenBuf[3] & 0xFF);
-      return in.readNBytes(respLen);
-    }
+    return connectionManager.sendToAddress(addr, command).get(5000, TimeUnit.MILLISECONDS);
   }
 
   private void findCoordinator() {

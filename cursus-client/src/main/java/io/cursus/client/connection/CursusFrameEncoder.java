@@ -1,12 +1,21 @@
 package io.cursus.client.connection;
 
-import io.netty.handler.codec.LengthFieldPrepender;
-import java.nio.ByteOrder;
+import io.cursus.client.protocol.WireProtocol;
+import io.netty.buffer.ByteBuf;
+import io.netty.channel.ChannelHandlerContext;
+import io.netty.handler.codec.MessageToByteEncoder;
 
-/** Prepends a 4-byte big-endian length prefix to outgoing frames. */
-public class CursusFrameEncoder extends LengthFieldPrepender {
+/** Encodes canonical Cursus Wire v2 frames. */
+public class CursusFrameEncoder extends MessageToByteEncoder<WireProtocol.Frame> {
 
-  public CursusFrameEncoder() {
-    super(ByteOrder.BIG_ENDIAN, 4, 0, false);
+  private volatile WireProtocol.Compression compression = WireProtocol.Compression.NONE;
+
+  public void setCompression(WireProtocol.Compression compression) {
+    this.compression = compression;
+  }
+
+  @Override
+  protected void encode(ChannelHandlerContext context, WireProtocol.Frame frame, ByteBuf output) {
+    output.writeBytes(WireProtocol.encodeFrame(frame, compression));
   }
 }

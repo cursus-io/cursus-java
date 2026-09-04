@@ -27,6 +27,8 @@ public class CursusProducerConfig {
   @Builder.Default private String compressionType = "none";
   private String tlsCertPath;
   private String tlsKeyPath;
+  private String principal;
+  private String authToken;
   @Builder.Default private int maxRetries = 3;
   @Builder.Default private long maxBackoffMs = 10000;
 }

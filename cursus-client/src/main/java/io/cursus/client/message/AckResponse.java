@@ -1,5 +1,6 @@
 package io.cursus.client.message;
 
+import java.util.Map;
 import lombok.Builder;
 import lombok.Data;
 
@@ -18,6 +19,10 @@ public class AckResponse {
   private long seqEnd;
   private String leader;
   private String errorMsg;
+  private String errorCode;
+  private String errorClass;
+  private boolean retryable;
+  private Map<String, String> errorFields;
 
   public boolean isOk() {
     return "OK".equals(status);

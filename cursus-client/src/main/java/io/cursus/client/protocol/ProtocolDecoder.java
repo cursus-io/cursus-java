@@ -21,6 +21,16 @@ import java.util.Map;
  */
 public final class ProtocolDecoder {
 
+  private static final int RECORD_VERSION = 2;
+  private static final long RECORD_TIMESTAMP = 1L;
+  private static final long RECORD_PRODUCER = 1L << 1;
+  private static final long RECORD_KEY = 1L << 2;
+  private static final long RECORD_EVENT_TYPE = 1L << 3;
+  private static final long RECORD_SCHEMA_VERSION = 1L << 4;
+  private static final long RECORD_AGGREGATE_VERSION = 1L << 5;
+  private static final long RECORD_METADATA = 1L << 6;
+  private static final long RECORD_KNOWN_MASK = (1L << 15) - 1;
+
   private ProtocolDecoder() {}
 
   /** Broker-retention range returned with OFFSET_OUT_OF_RANGE responses. */
@@ -39,7 +49,20 @@ public final class ProtocolDecoder {
       String type, String reason, Long offset, Long requested, Long earliest, Long latest) {}
 
   public static AckResponse decodeAckResponse(byte[] data) {
-    String json = new String(data, StandardCharsets.UTF_8).trim();
+    String response = new String(data, StandardCharsets.UTF_8).trim();
+    if (response.startsWith("ERROR:")) {
+      String[] parts = response.split("\\s+");
+      Map<String, String> fields = decodeFields(response);
+      return AckResponse.builder()
+          .status("ERROR")
+          .errorMsg(response)
+          .errorCode(parts.length > 1 ? parts[1] : "unknown")
+          .errorClass(fields.remove("class"))
+          .retryable(Boolean.parseBoolean(fields.remove("retryable")))
+          .errorFields(Map.copyOf(fields))
+          .build();
+    }
+    String json = response;
     return AckResponse.builder()
         .status(extractJsonString(json, "status"))
         .lastOffset(extractJsonLong(json, "last_offset"))
@@ -53,27 +76,34 @@ public final class ProtocolDecoder {
   }
 
   public static List<CursusMessage> decodeBatchMessages(byte[] data) {
-    ByteBuffer buf = ByteBuffer.wrap(data).order(ByteOrder.BIG_ENDIAN);
-
-    int magic = Short.toUnsignedInt(buf.getShort());
+    BinaryReader reader = new BinaryReader(data);
+    int magic = reader.uint32();
     if (magic != ProtocolEncoder.BATCH_MAGIC) {
       throw new CursusProtocolException("Invalid batch magic: 0x" + Integer.toHexString(magic));
     }
-
-    skipLengthPrefixed(buf); // topic
-    buf.getInt(); // partition (int32)
-    skipByteLengthPrefixed(buf); // acks (uint8 length prefix)
-    buf.get(); // idempotent flag
-    buf.getLong(); // seqStart
-    buf.getLong(); // seqEnd
-
-    int messageCount = buf.getInt();
-    List<CursusMessage> messages = new ArrayList<>(messageCount);
-
-    for (int i = 0; i < messageCount; i++) {
-      messages.add(decodeMessageFromBatch(buf));
+    int version = reader.uint16();
+    if (version != WireProtocol.BATCH_VERSION) {
+      throw new CursusProtocolException("Unsupported Wire v2 batch version: " + version);
     }
+    int flags = reader.uint16();
+    if ((flags & ~1) != 0) {
+      throw new CursusProtocolException("Unknown Wire v2 batch flags: " + flags);
+    }
+    String topic = reader.string();
+    int partition = reader.int32();
+    validateAcks(reader.string());
+    reader.uint64(); // seqStart
+    reader.uint64(); // seqEnd
 
+    int messageCount = reader.uint32();
+    if (messageCount < 0) {
+      throw new CursusProtocolException("Wire v2 batch message count exceeds int range");
+    }
+    List<CursusMessage> messages = new ArrayList<>(messageCount);
+    for (int i = 0; i < messageCount; i++) {
+      messages.add(decodeRecord(reader.bytes(), topic, partition));
+    }
+    reader.finish();
     return messages;
   }
 
@@ -271,7 +301,7 @@ public final class ProtocolDecoder {
   }
 
   public static boolean isNotLeaderResponse(String response) {
-    return response != null && response.contains("NOT_LEADER");
+    return response != null && response.toLowerCase().contains("not_leader");
   }
 
   public static boolean isRebalanceRequired(String response) {
@@ -304,7 +334,11 @@ public final class ProtocolDecoder {
   }
 
   public static boolean isTerminalProducerError(AckResponse ack) {
-    return ack != null && isTerminalProducerError(ack.getErrorMsg());
+    if (ack == null) return false;
+    String code = ack.getErrorCode();
+    return "stale_producer_epoch".equalsIgnoreCase(code)
+        || "idempotency_gap".equalsIgnoreCase(code)
+        || isTerminalProducerError(ack.getErrorMsg());
   }
 
   public static boolean isStaleProducerEpoch(String response) {
@@ -382,50 +416,104 @@ public final class ProtocolDecoder {
     }
   }
 
-  private static CursusMessage decodeMessageFromBatch(ByteBuffer buf) {
-    long offset = buf.getLong();
-    long seqNum = buf.getLong();
-    String producerId = readLengthPrefixed(buf);
-    String key = readLengthPrefixed(buf);
-    long epoch = buf.getLong();
-    int payloadLen = buf.getInt();
-    byte[] payloadBytes = new byte[payloadLen];
-    buf.get(payloadBytes);
-    String payload = new String(payloadBytes, StandardCharsets.UTF_8);
-    String eventType = readLengthPrefixed(buf);
-    long schemaVersion = Integer.toUnsignedLong(buf.getInt());
-    long aggregateVersion = buf.getLong();
-    String metadata = readLengthPrefixed(buf);
+  private static CursusMessage decodeRecord(byte[] data, String topic, int partition) {
+    BinaryReader reader = new BinaryReader(data);
+    int version = reader.uint16();
+    if (version != RECORD_VERSION) {
+      throw new CursusProtocolException("Unsupported Wire v2 record version: " + version);
+    }
+    long presence = reader.uint64();
+    if ((presence & ~RECORD_KNOWN_MASK) != 0) {
+      throw new CursusProtocolException("Wire v2 record contains unknown presence bits");
+    }
+    String recordTopic = reader.string();
+    int recordPartition = reader.int32();
+    if (!topic.equals(recordTopic) || partition != recordPartition) {
+      throw new CursusProtocolException("Wire v2 record routing conflicts with batch");
+    }
+    long offset = reader.uint64();
+    String payload = reader.string();
+    long timestamp = (presence & RECORD_TIMESTAMP) != 0 ? reader.uint64() : 0;
+
+    String producerId = null;
+    long seqNum = 0;
+    int epoch = 0;
+    if ((presence & RECORD_PRODUCER) != 0) {
+      producerId = reader.string();
+      seqNum = reader.uint64();
+      long wireEpoch = reader.uint64();
+      if (wireEpoch < Integer.MIN_VALUE || wireEpoch > Integer.MAX_VALUE) {
+        throw new CursusProtocolException("Wire v2 producer epoch is outside Java int range");
+      }
+      epoch = (int) wireEpoch;
+    }
+    String key = (presence & RECORD_KEY) != 0 ? reader.string() : null;
+    String eventType = (presence & RECORD_EVENT_TYPE) != 0 ? reader.string() : null;
+    long schemaVersion =
+        (presence & RECORD_SCHEMA_VERSION) != 0 ? Integer.toUnsignedLong(reader.uint32()) : 0;
+    long aggregateVersion = (presence & RECORD_AGGREGATE_VERSION) != 0 ? reader.uint64() : 0;
+    String metadata = (presence & RECORD_METADATA) != 0 ? reader.string() : null;
+    String transactionalId = (presence & (1L << 7)) != 0 ? reader.string() : null;
+    String transactionState = (presence & (1L << 8)) != 0 ? reader.string() : null;
+    String transactionMarker = (presence & (1L << 9)) != 0 ? reader.string() : null;
+    String controlBatchType = (presence & (1L << 10)) != 0 ? reader.string() : null;
+    int controlBatchVersion = (presence & (1L << 11)) != 0 ? reader.int16() : 0;
+    long controlCoordinatorEpoch = (presence & (1L << 12)) != 0 ? reader.uint64() : 0;
+    byte[] controlKey = (presence & (1L << 13)) != 0 ? reader.bytes() : null;
+    byte[] controlValue = (presence & (1L << 14)) != 0 ? reader.bytes() : null;
+    reader.finish();
+    validateTransactionFields(transactionState, transactionMarker, controlBatchType);
 
     return CursusMessage.builder()
         .offset(offset)
         .seqNum(seqNum)
         .producerId(producerId)
         .key(key)
-        .epoch((int) epoch)
+        .epoch(epoch)
         .payload(payload)
         .eventType(eventType)
         .schemaVersion(schemaVersion)
         .aggregateVersion(aggregateVersion)
         .metadata(metadata)
+        .timestamp(timestamp)
+        .transactionalId(transactionalId)
+        .transactionState(transactionState)
+        .transactionMarker(transactionMarker)
+        .controlBatchType(controlBatchType)
+        .controlBatchVersion(controlBatchVersion)
+        .controlBatchCoordinatorEpoch(controlCoordinatorEpoch)
+        .controlBatchKey(controlKey)
+        .controlBatchValue(controlValue)
         .build();
   }
 
-  private static String readLengthPrefixed(ByteBuffer buf) {
-    int len = Short.toUnsignedInt(buf.getShort());
-    byte[] bytes = new byte[len];
-    buf.get(bytes);
-    return new String(bytes, StandardCharsets.UTF_8);
+  private static void validateTransactionFields(String state, String marker, String controlType) {
+    if (!(state == null
+        || state.isEmpty()
+        || "open".equals(state)
+        || "committed".equals(state)
+        || "aborted".equals(state))) {
+      throw new CursusProtocolException("Invalid transaction state: " + state);
+    }
+    if (!(marker == null
+        || marker.isEmpty()
+        || "commit".equals(marker)
+        || "abort".equals(marker))) {
+      throw new CursusProtocolException("Invalid transaction marker: " + marker);
+    }
+    if (!(controlType == null || controlType.isEmpty() || "transaction".equals(controlType))) {
+      throw new CursusProtocolException("Invalid control batch type: " + controlType);
+    }
   }
 
-  private static void skipLengthPrefixed(ByteBuffer buf) {
-    int len = Short.toUnsignedInt(buf.getShort());
-    buf.position(buf.position() + len);
-  }
-
-  private static void skipByteLengthPrefixed(ByteBuffer buf) {
-    int len = Byte.toUnsignedInt(buf.get());
-    buf.position(buf.position() + len);
+  private static void validateAcks(String acks) {
+    if (!(acks.isEmpty()
+        || "0".equals(acks)
+        || "1".equals(acks)
+        || "-1".equals(acks)
+        || "all".equals(acks))) {
+      throw new CursusProtocolException("Invalid acknowledgements: " + acks);
+    }
   }
 
   private static String extractJsonString(String json, String key) {
@@ -457,5 +545,67 @@ public final class ProtocolDecoder {
 
   private static int extractJsonInt(String json, String key) {
     return (int) extractJsonLong(json, key);
+  }
+
+  private static final class BinaryReader {
+    private final ByteBuffer data;
+
+    BinaryReader(byte[] value) {
+      if (value.length > WireProtocol.MAX_FRAME_PAYLOAD) {
+        throw new CursusProtocolException("Wire v2 payload exceeds maximum frame size");
+      }
+      data = ByteBuffer.wrap(value).order(ByteOrder.BIG_ENDIAN);
+    }
+
+    int uint16() {
+      require(2);
+      return Short.toUnsignedInt(data.getShort());
+    }
+
+    int int16() {
+      require(2);
+      return data.getShort();
+    }
+
+    int uint32() {
+      require(4);
+      return data.getInt();
+    }
+
+    int int32() {
+      return uint32();
+    }
+
+    long uint64() {
+      require(8);
+      return data.getLong();
+    }
+
+    String string() {
+      return new String(bytes(), StandardCharsets.UTF_8);
+    }
+
+    byte[] bytes() {
+      int length = uint32();
+      if (length < 0) {
+        throw new CursusProtocolException("Wire v2 field length exceeds Java int range");
+      }
+      require(length);
+      byte[] result = new byte[length];
+      data.get(result);
+      return result;
+    }
+
+    void finish() {
+      if (data.hasRemaining()) {
+        throw new CursusProtocolException("Wire v2 payload has trailing bytes");
+      }
+    }
+
+    private void require(int size) {
+      if (size < 0 || data.remaining() < size) {
+        throw new CursusProtocolException("Truncated Wire v2 binary field");
+      }
+    }
   }
 }

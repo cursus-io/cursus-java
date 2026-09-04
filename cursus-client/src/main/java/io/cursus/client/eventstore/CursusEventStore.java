@@ -2,20 +2,20 @@ package io.cursus.client.eventstore;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import io.cursus.client.connection.BlockingWireConnection;
 import io.cursus.client.exception.CursusConnectionException;
 import io.cursus.client.exception.CursusException;
+import io.cursus.client.framework.EventEnvelope;
+import io.cursus.client.framework.StreamStore;
 import io.cursus.client.message.CursusMessage;
 import io.cursus.client.protocol.ProtocolDecoder;
-import java.io.InputStream;
-import java.io.OutputStream;
-import java.net.Socket;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.List;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-public class CursusEventStore implements AutoCloseable {
+public class CursusEventStore implements AutoCloseable, StreamStore {
 
   private static final Logger log = LoggerFactory.getLogger(CursusEventStore.class);
   private static final ObjectMapper MAPPER = new ObjectMapper();
@@ -24,37 +24,59 @@ public class CursusEventStore implements AutoCloseable {
   private String addr;
   private final String topic;
   private final String producerId;
-  private Socket socket;
+  private final int timeoutMs;
+  private final String compressionType;
+  private final String principal;
+  private final String authToken;
+  private BlockingWireConnection connection;
 
   public CursusEventStore(String addr, String topic, String producerId) {
-    this(List.of(addr), topic, producerId);
+    this(List.of(addr), topic, producerId, 10000, "none", null, null);
   }
 
   public CursusEventStore(List<String> addrs, String topic, String producerId) {
+    this(addrs, topic, producerId, 10000, "none", null, null);
+  }
+
+  public CursusEventStore(
+      List<String> addrs,
+      String topic,
+      String producerId,
+      int timeoutMs,
+      String compressionType,
+      String principal,
+      String authToken) {
     if (addrs == null || addrs.isEmpty()) {
       throw new IllegalArgumentException("at least one broker address is required");
+    }
+    if ((principal == null || principal.isBlank()) != (authToken == null || authToken.isBlank())) {
+      throw new IllegalArgumentException("principal and authToken must be configured together");
     }
     this.addrs = List.copyOf(addrs);
     this.addr = this.addrs.get(0);
     this.topic = topic;
     this.producerId = producerId;
+    this.timeoutMs = timeoutMs;
+    this.compressionType = compressionType == null ? "none" : compressionType;
+    this.principal = principal;
+    this.authToken = authToken;
   }
 
-  private Socket getSocket() throws Exception {
-    if (socket != null && !socket.isClosed()) return socket;
-    String[] parts = addr.split(":");
-    socket = new Socket(parts[0], Integer.parseInt(parts[1]));
-    socket.setSoTimeout(10000);
-    return socket;
+  private BlockingWireConnection getConnection() {
+    if (connection == null) {
+      connection =
+          new BlockingWireConnection(addr, timeoutMs, compressionType, principal, authToken);
+    }
+    return connection;
   }
 
   private void resetSocket() {
-    if (socket != null) {
+    if (connection != null) {
       try {
-        socket.close();
+        connection.close();
       } catch (Exception ignored) {
       }
-      socket = null;
+      connection = null;
     }
   }
 
@@ -66,25 +88,7 @@ public class CursusEventStore implements AutoCloseable {
   }
 
   private String sendCommandOnce(String command) throws Exception {
-    Socket s = getSocket();
-    OutputStream out = s.getOutputStream();
-    InputStream in = s.getInputStream();
-
-    byte[] cmdBytes = command.getBytes(StandardCharsets.UTF_8);
-    byte[] payload = new byte[2 + cmdBytes.length];
-    System.arraycopy(cmdBytes, 0, payload, 2, cmdBytes.length);
-
-    byte[] frame = new byte[4 + payload.length];
-    frame[0] = (byte) (payload.length >> 24);
-    frame[1] = (byte) (payload.length >> 16);
-    frame[2] = (byte) (payload.length >> 8);
-    frame[3] = (byte) (payload.length);
-    System.arraycopy(payload, 0, frame, 4, payload.length);
-    out.write(frame);
-    out.flush();
-
-    byte[] resp = readFrameFrom(in);
-    return new String(resp, StandardCharsets.UTF_8);
+    return new String(getConnection().sendCommand(command), StandardCharsets.UTF_8);
   }
 
   private String sendCommand(String command) throws Exception {
@@ -115,25 +119,13 @@ public class CursusEventStore implements AutoCloseable {
     return last;
   }
 
-  private byte[] readFrame() throws Exception {
-    return readFrameFrom(getSocket().getInputStream());
-  }
-
-  private byte[] readFrameFrom(InputStream in) throws Exception {
-    byte[] lenBuf = in.readNBytes(4);
-    if (lenBuf.length != 4) {
-      throw new CursusConnectionException("Connection closed while reading frame length");
-    }
-    int respLen =
-        ((lenBuf[0] & 0xFF) << 24)
-            | ((lenBuf[1] & 0xFF) << 16)
-            | ((lenBuf[2] & 0xFF) << 8)
-            | (lenBuf[3] & 0xFF);
-    return in.readNBytes(respLen);
-  }
-
   private static String leaderFromError(String resp) {
     if (resp == null) return null;
+    for (String part : resp.split("\\s+")) {
+      if (part.startsWith("leader=") && part.length() > "leader=".length()) {
+        return part.substring("leader=".length());
+      }
+    }
     String marker = "NOT_LEADER LEADER_IS";
     int idx = resp.indexOf(marker);
     if (idx < 0) return null;
@@ -205,6 +197,37 @@ public class CursusEventStore implements AutoCloseable {
     }
   }
 
+  public AppendResult appendEnvelope(String key, long expectedVersion, EventEnvelope source) {
+    if (source.aggregateId() != null
+        && !source.aggregateId().isBlank()
+        && !source.aggregateId().equals(key)) {
+      throw new IllegalArgumentException("event aggregate id does not match stream key");
+    }
+    if (source.aggregateVersion() != 0 && source.aggregateVersion() != expectedVersion + 1) {
+      throw new IllegalArgumentException("event aggregate version does not match expected version");
+    }
+    EventEnvelope event =
+        new EventEnvelope(
+            source.eventId(),
+            source.eventType(),
+            source.schemaVersion(),
+            source.aggregateType(),
+            source.aggregateId() == null || source.aggregateId().isBlank()
+                ? key
+                : source.aggregateId(),
+            expectedVersion + 1,
+            source.occurredAt(),
+            source.correlationId(),
+            source.associationKey(),
+            source.causationId(),
+            source.payload());
+    return append(key, expectedVersion, event.toEvent());
+  }
+
+  public List<EventEnvelope> readEnvelopes(String key) {
+    return readStream(key).getEvents().stream().map(EventEnvelope::fromStreamEvent).toList();
+  }
+
   private AppendResult parseAppendResponse(String resp) {
     if (!resp.startsWith("OK")) {
       throw new CursusException("append: unexpected response: " + resp);
@@ -262,22 +285,9 @@ public class CursusEventStore implements AutoCloseable {
   }
 
   private StreamData readStreamOnce(String cmd) throws Exception {
-    Socket s = getSocket();
-    OutputStream out = s.getOutputStream();
-
-    byte[] cmdBytes = cmd.getBytes(StandardCharsets.UTF_8);
-    byte[] payload = new byte[2 + cmdBytes.length];
-    System.arraycopy(cmdBytes, 0, payload, 2, cmdBytes.length);
-    byte[] frame = new byte[4 + payload.length];
-    frame[0] = (byte) (payload.length >> 24);
-    frame[1] = (byte) (payload.length >> 16);
-    frame[2] = (byte) (payload.length >> 8);
-    frame[3] = (byte) (payload.length);
-    System.arraycopy(payload, 0, frame, 4, payload.length);
-    out.write(frame);
-    out.flush();
-
-    byte[] envData = readFrame();
+    List<byte[]> responses = getConnection().readStream(cmd);
+    if (responses.isEmpty()) throw new CursusException("readStream: empty response");
+    byte[] envData = responses.get(0);
     JsonNode envelope;
     try {
       envelope = MAPPER.readTree(envData);
@@ -299,7 +309,10 @@ public class CursusEventStore implements AutoCloseable {
       snapshot = new Snapshot(snapNode.get("version").asLong(), snapNode.get("payload").asText());
     }
 
-    byte[] batchData = readFrame();
+    if (responses.size() != 2) {
+      throw new CursusException("readStream: missing Wire v2 batch response");
+    }
+    byte[] batchData = responses.get(1);
     List<StreamEvent> events = new ArrayList<>();
     if (batchData.length > 0) {
       List<CursusMessage> messages = ProtocolDecoder.decodeBatchMessages(batchData);
