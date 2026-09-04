@@ -1,7 +1,7 @@
 dependencies {
     api "io.netty:netty-all:${nettyVersion}"
     api "org.slf4j:slf4j-api:${slf4jVersion}"
-    implementation 'com.fasterxml.jackson.core:jackson-databind:2.22.1'
+    implementation 'com.fasterxml.jackson.core:jackson-databind:2.22.2'
     implementation 'org.xerial.snappy:snappy-java:1.1.10.8'
     implementation 'at.yawk.lz4:lz4-java:1.11.2'
 
