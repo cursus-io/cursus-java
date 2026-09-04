@@ -1,7 +1,5 @@
 package io.cursus.client.producer;
 
-import io.cursus.client.compression.CompressionRegistry;
-import io.cursus.client.compression.CursusCompressor;
 import io.cursus.client.config.CursusProducerConfig;
 import io.cursus.client.connection.ConnectionManager;
 import io.cursus.client.exception.CursusProducerClosedException;
@@ -14,7 +12,6 @@ import io.cursus.client.protocol.ProtocolEncoder;
 import io.cursus.client.util.Backoff;
 import io.cursus.client.util.ExecutorFactory;
 import io.cursus.client.util.FnvHash;
-import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.util.*;
@@ -37,7 +34,6 @@ public class CursusProducer implements AutoCloseable {
   private final PartitionBuffer[] partitionBuffers;
   private final ExecutorService flushExecutor;
   private final ScheduledExecutorService lingerScheduler;
-  private final CursusCompressor compressor;
   private final AtomicBoolean closed = new AtomicBoolean(false);
   private final AtomicLong uniqueAckCount = new AtomicLong(0);
   private final AtomicInteger roundRobinCounter = new AtomicInteger(0);
@@ -61,8 +57,13 @@ public class CursusProducer implements AutoCloseable {
     this.producerEpoch = (int) (System.currentTimeMillis() / 1000L);
     this.connectionManager =
         new ConnectionManager(
-            config.getBrokers(), config.getTlsCertPath(),
-            config.getTlsKeyPath(), config.getLeaderStalenessMs());
+            config.getBrokers(),
+            config.getTlsCertPath(),
+            config.getTlsKeyPath(),
+            config.getLeaderStalenessMs(),
+            config.getCompressionType(),
+            config.getPrincipal(),
+            config.getAuthToken());
 
     this.flushExecutor =
         ExecutorFactory.create(config.getMaxInflightRequests(), "cursus-producer-flush");
@@ -79,13 +80,7 @@ public class CursusProducer implements AutoCloseable {
           this::lingerFlush, config.getLingerMs(), config.getLingerMs(), TimeUnit.MILLISECONDS);
     }
 
-    if (!"none".equals(config.getCompressionType())) {
-      this.compressor = CompressionRegistry.getInstance().get(config.getCompressionType());
-    } else {
-      this.compressor = null;
-    }
-
-    createTopic(config.getTopic(), config.getPartitions());
+    if (config.isAutoCreateTopic()) createTopic(config.getTopic(), config.getPartitions());
     int verifiedPartitions = verifyPartitionCount(config.getTopic(), config.getPartitions());
 
     this.partitionBuffers = new PartitionBuffer[verifiedPartitions];
@@ -133,10 +128,12 @@ public class CursusProducer implements AutoCloseable {
     String cmd = CommandBuilder.create(topic, partitions);
     byte[] adminMsg = ProtocolEncoder.encodeMessage("admin", cmd.getBytes(StandardCharsets.UTF_8));
     try {
-      connectionManager.send(adminMsg).get(config.getWriteTimeoutMs(), TimeUnit.MILLISECONDS);
+      byte[] response =
+          connectionManager.send(adminMsg).get(config.getWriteTimeoutMs(), TimeUnit.MILLISECONDS);
+      ProtocolDecoder.requireOk(new String(response, StandardCharsets.UTF_8), "topic auto-create");
       log.info("Topic '{}' created with {} partitions", topic, partitions);
     } catch (Exception e) {
-      log.warn("Topic creation failed (may already exist): {}", e.getMessage());
+      throw new IllegalStateException("Topic auto-create failed", e);
     }
   }
 
@@ -177,54 +174,23 @@ public class CursusProducer implements AutoCloseable {
   private void fetchMetadata() {
     try {
       String cmd = CommandBuilder.metadata(config.getTopic());
-      List<String> brokers = config.getBrokers();
-      if (brokers == null || brokers.isEmpty()) return;
-      String addr = brokers.get(0);
-
-      String[] parts = addr.split(":");
-      try (java.net.Socket socket = new java.net.Socket(parts[0], Integer.parseInt(parts[1]))) {
-        socket.setSoTimeout(5000);
-        java.io.OutputStream out = socket.getOutputStream();
-        java.io.InputStream in = socket.getInputStream();
-
-        byte[] cmdBytes = cmd.getBytes(StandardCharsets.UTF_8);
-        byte[] payload = new byte[2 + cmdBytes.length];
-        System.arraycopy(cmdBytes, 0, payload, 2, cmdBytes.length);
-
-        byte[] frame = new byte[4 + payload.length];
-        frame[0] = (byte) (payload.length >> 24);
-        frame[1] = (byte) (payload.length >> 16);
-        frame[2] = (byte) (payload.length >> 8);
-        frame[3] = (byte) (payload.length);
-        System.arraycopy(payload, 0, frame, 4, payload.length);
-        out.write(frame);
-        out.flush();
-
-        byte[] lenBuf = in.readNBytes(4);
-        int respLen =
-            ((lenBuf[0] & 0xFF) << 24)
-                | ((lenBuf[1] & 0xFF) << 16)
-                | ((lenBuf[2] & 0xFF) << 8)
-                | (lenBuf[3] & 0xFF);
-        byte[] respBytes = in.readNBytes(respLen);
-        String result = new String(respBytes, StandardCharsets.UTF_8);
-
-        if (result.startsWith("OK")) {
-          for (String part : result.split("\\s+")) {
-            if (part.startsWith("leaders=")) {
-              String[] addrs = part.substring(8).split(",");
-              for (int i = 0; i < addrs.length; i++) {
-                String leaderAddr = addrs[i].trim();
-                if (!leaderAddr.isEmpty()) {
-                  partitionLeaders.put(i, leaderAddr);
-                }
+      byte[] response = connectionManager.sendCommand(cmd).get(5000, TimeUnit.MILLISECONDS);
+      String result = new String(response, StandardCharsets.UTF_8);
+      if (result.startsWith("OK")) {
+        for (String part : result.split("\\s+")) {
+          if (part.startsWith("leaders=")) {
+            String[] addresses = part.substring(8).split(",");
+            for (int i = 0; i < addresses.length; i++) {
+              String leaderAddress = addresses[i].trim();
+              if (!leaderAddress.isEmpty()) {
+                partitionLeaders.put(i, leaderAddress);
               }
             }
           }
-          log.info("Producer partition leaders: {}", partitionLeaders);
         }
+        log.info("Producer partition leaders: {}", partitionLeaders);
       }
-    } catch (IOException e) {
+    } catch (Exception e) {
       log.debug("Producer metadata fetch failed (non-critical): {}", e.getMessage());
     }
   }
@@ -345,21 +311,15 @@ public class CursusProducer implements AutoCloseable {
                           config.isIdempotent(),
                           messages.get(0).getSeqNum());
 
-                  if (compressor != null) encoded = compressor.compress(encoded);
-
                   byte[] responseBytes =
                       connectionManager
                           .sendOnPartition(partition, encoded)
                           .get(config.getWriteTimeoutMs(), TimeUnit.MILLISECONDS);
 
-                  String response = new String(responseBytes, StandardCharsets.UTF_8);
-
-                  if (ProtocolDecoder.isNotLeaderResponse(response)) {
-                    log.warn("NOT_LEADER response, retrying...");
-                    connectionManager.updateLeader(null);
-                    Thread.sleep(backoff.nextBackoff().toMillis());
-                    if (metrics != null) metrics.recordRetry();
-                    continue;
+                  if ("0".equals(config.getAcks().protocolValue())) {
+                    state.setAcknowledged(true);
+                    batchStates.remove(batchId);
+                    return;
                   }
 
                   AckResponse ack = ProtocolDecoder.decodeAckResponse(responseBytes);
@@ -384,6 +344,23 @@ public class CursusProducer implements AutoCloseable {
                           "Producer fenced by terminal idempotency error: {}", ack.getErrorMsg());
                       return;
                     }
+                    if (!shouldRetry(ack, config.isIdempotent())) {
+                      batchStates.remove(batchId);
+                      if (metrics != null) metrics.recordFailure(messages.size());
+                      log.error("Non-retryable batch error: {}", ack.getErrorMsg());
+                      return;
+                    }
+                    if ("not_leader".equalsIgnoreCase(ack.getErrorCode())) {
+                      String leader =
+                          ack.getErrorFields() == null ? null : ack.getErrorFields().get("leader");
+                      if (leader != null && !leader.isBlank()) {
+                        partitionLeaders.put(partition, leader);
+                        connectionManager.connectPartitionToAddress(partition, leader);
+                      } else {
+                        connectionManager.updateLeader(null);
+                        connectionManager.connectPartition(partition);
+                      }
+                    }
                     log.warn("Batch error: {}", ack.getErrorMsg());
                   }
                 } catch (TimeoutException e) {
@@ -392,6 +369,7 @@ public class CursusProducer implements AutoCloseable {
                   log.warn("Batch send failed on attempt {}: {}", attempt + 1, e.getMessage());
                 }
 
+                if (!config.isIdempotent()) break;
                 if (attempt < config.getMaxRetries()) {
                   try {
                     Thread.sleep(backoff.nextBackoff().toMillis());
@@ -411,6 +389,10 @@ public class CursusProducer implements AutoCloseable {
     inflightFutures.add(future);
     future.whenComplete((v, ex) -> inflightFutures.remove(future));
     return future;
+  }
+
+  static boolean shouldRetry(AckResponse ack, boolean idempotent) {
+    return idempotent && ack != null && ack.isRetryable();
   }
 
   public record PartitionStat(int partitionId, int pendingCount) {}

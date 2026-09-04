@@ -25,6 +25,7 @@ public class CursusConsumerConfig {
   @Builder.Default private int batchSize = 100;
   @Builder.Default private boolean immediateCommit = false;
   @Builder.Default private int commitBatchSize = 100;
+  @Builder.Default private String compressionType = "none";
   @Builder.Default private long commitIntervalMs = 5000;
   private String tlsCertPath;
   private String tlsKeyPath;

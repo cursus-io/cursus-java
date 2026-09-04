@@ -1,37 +1,91 @@
 package io.cursus.client.protocol;
 
+import io.cursus.client.connection.ConnectionManager;
+import io.cursus.client.exception.CursusBrokerException;
 import io.cursus.client.exception.CursusConnectionException;
-import java.io.InputStream;
-import java.io.OutputStream;
-import java.net.Socket;
-import java.nio.ByteBuffer;
-import java.nio.ByteOrder;
 import java.nio.charset.StandardCharsets;
 import java.util.List;
+import java.util.concurrent.TimeUnit;
 
 public class BrokerCommandClient {
   private final List<String> brokers;
   private final int timeoutMs;
   private final int maxRetries;
   private final long backoffMs;
+  private final String tlsCertPath;
+  private final String tlsKeyPath;
+  private final String compressionType;
+  private final String principal;
+  private final String authToken;
 
   public BrokerCommandClient(List<String> brokers, int timeoutMs, int maxRetries, long backoffMs) {
+    this(brokers, timeoutMs, maxRetries, backoffMs, "none", null, null);
+  }
+
+  public BrokerCommandClient(
+      List<String> brokers,
+      int timeoutMs,
+      int maxRetries,
+      long backoffMs,
+      String compressionType,
+      String principal,
+      String authToken) {
+    this(
+        brokers,
+        timeoutMs,
+        maxRetries,
+        backoffMs,
+        null,
+        null,
+        compressionType,
+        principal,
+        authToken);
+  }
+
+  public BrokerCommandClient(
+      List<String> brokers,
+      int timeoutMs,
+      int maxRetries,
+      long backoffMs,
+      String tlsCertPath,
+      String tlsKeyPath,
+      String compressionType,
+      String principal,
+      String authToken) {
     this.brokers = brokers == null || brokers.isEmpty() ? List.of("localhost:9000") : brokers;
     this.timeoutMs = timeoutMs;
-    this.maxRetries = Math.max(1, maxRetries);
+    if (maxRetries < 0) throw new IllegalArgumentException("maxRetries must be non-negative");
+    if ((principal == null || principal.isBlank()) != (authToken == null || authToken.isBlank())) {
+      throw new IllegalArgumentException("principal and authToken must be configured together");
+    }
+    this.maxRetries = maxRetries;
     this.backoffMs = Math.max(0, backoffMs);
+    this.tlsCertPath = tlsCertPath;
+    this.tlsKeyPath = tlsKeyPath;
+    this.compressionType = compressionType == null ? "none" : compressionType;
+    this.principal = principal;
+    this.authToken = authToken;
   }
 
   public String sendAny(String command, String operation) {
+    return sendAny(command, operation, true);
+  }
+
+  public String sendAny(String command, String operation, boolean retryAmbiguous) {
     RuntimeException last = null;
-    for (int attempt = 0; attempt < maxRetries; attempt++) {
+    for (int attempt = 0; attempt <= maxRetries; attempt++) {
       for (String broker : brokers) {
         try {
           String response = sendTo(broker, command);
           ProtocolDecoder.requireOk(response, operation);
           return response;
         } catch (RuntimeException e) {
-          if (e instanceof io.cursus.client.exception.CursusBrokerException) throw e;
+          if (e instanceof CursusBrokerException brokerError) {
+            if (!brokerError.isRetryable() || !retryAmbiguous) throw e;
+          } else if (!retryAmbiguous) {
+            throw new CursusConnectionException(
+                operation + " outcome is unknown and was not retried", e);
+          }
           last = e;
         }
       }
@@ -43,7 +97,7 @@ public class BrokerCommandClient {
   public String sendTransaction(String transactionalId, String command) {
     String addr = brokers.get(0);
     String lastResponse = "";
-    for (int attempt = 0; attempt < maxRetries; attempt++) {
+    for (int attempt = 0; attempt <= maxRetries; attempt++) {
       String response = sendTo(addr, command);
       lastResponse = response;
       String redirect = ProtocolDecoder.decodeNotCoordinator(response);
@@ -60,26 +114,18 @@ public class BrokerCommandClient {
   }
 
   protected String sendTo(String addr, String command) {
-    String[] parts = addr.split(":");
-    try (Socket socket = new Socket(parts[0], Integer.parseInt(parts[1]))) {
-      socket.setSoTimeout(timeoutMs);
-      OutputStream out = socket.getOutputStream();
-      InputStream in = socket.getInputStream();
-      byte[] payload = ProtocolEncoder.encodeMessage("", command.getBytes(StandardCharsets.UTF_8));
-      ByteBuffer frame = ByteBuffer.allocate(4 + payload.length).order(ByteOrder.BIG_ENDIAN);
-      frame.putInt(payload.length);
-      frame.put(payload);
-      out.write(frame.array());
-      out.flush();
-
-      byte[] lenBuf = in.readNBytes(4);
-      if (lenBuf.length != 4) throw new CursusConnectionException("connection closed");
-      int len = ByteBuffer.wrap(lenBuf).order(ByteOrder.BIG_ENDIAN).getInt();
-      byte[] response = in.readNBytes(len);
-      return new String(response, StandardCharsets.UTF_8).trim();
-    } catch (Exception e) {
-      if (e instanceof RuntimeException runtime) throw runtime;
-      throw new CursusConnectionException("command failed: " + command, e);
+    try (ConnectionManager connection =
+        new ConnectionManager(
+            List.of(addr), tlsCertPath, tlsKeyPath, 30000, compressionType, principal, authToken)) {
+      return new String(
+              connection.sendCommand(command).get(timeoutMs, TimeUnit.MILLISECONDS),
+              StandardCharsets.UTF_8)
+          .trim();
+    } catch (InterruptedException exception) {
+      Thread.currentThread().interrupt();
+      throw new CursusConnectionException("interrupted during broker command", exception);
+    } catch (Exception exception) {
+      throw new CursusConnectionException("broker command failed", exception);
     }
   }
 

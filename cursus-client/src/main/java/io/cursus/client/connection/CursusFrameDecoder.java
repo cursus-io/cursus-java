@@ -1,28 +1,32 @@
 package io.cursus.client.connection;
 
-import io.netty.handler.codec.LengthFieldBasedFrameDecoder;
-import java.nio.ByteOrder;
+import io.cursus.client.protocol.WireProtocol;
+import io.netty.buffer.ByteBuf;
+import io.netty.channel.ChannelHandlerContext;
+import io.netty.handler.codec.ByteToMessageDecoder;
+import java.util.List;
 
-/**
- * Decodes Cursus TCP frames using a 4-byte big-endian length prefix. Max frame size: 64MB (matching
- * Go SDK's MAX_MESSAGE_SIZE).
- */
-public class CursusFrameDecoder extends LengthFieldBasedFrameDecoder {
+/** Reassembles and validates canonical Cursus Wire v2 frames. */
+public class CursusFrameDecoder extends ByteToMessageDecoder {
 
-  private static final int MAX_FRAME_LENGTH = 64 * 1024 * 1024;
-  private static final int LENGTH_FIELD_OFFSET = 0;
-  private static final int LENGTH_FIELD_LENGTH = 4;
-  private static final int LENGTH_ADJUSTMENT = 0;
-  private static final int INITIAL_BYTES_TO_STRIP = 4;
+  private volatile WireProtocol.Compression compression = WireProtocol.Compression.NONE;
 
-  public CursusFrameDecoder() {
-    super(
-        ByteOrder.BIG_ENDIAN,
-        MAX_FRAME_LENGTH,
-        LENGTH_FIELD_OFFSET,
-        LENGTH_FIELD_LENGTH,
-        LENGTH_ADJUSTMENT,
-        INITIAL_BYTES_TO_STRIP,
-        true);
+  public void setCompression(WireProtocol.Compression compression) {
+    this.compression = compression;
+  }
+
+  @Override
+  protected void decode(ChannelHandlerContext context, ByteBuf input, List<Object> output) {
+    if (input.readableBytes() < WireProtocol.HEADER_SIZE) return;
+
+    byte[] header = new byte[WireProtocol.HEADER_SIZE];
+    input.getBytes(input.readerIndex(), header);
+    int encodedSize = WireProtocol.encodedFrameSize(header);
+    int frameSize = WireProtocol.HEADER_SIZE + encodedSize;
+    if (input.readableBytes() < frameSize) return;
+
+    byte[] encodedFrame = new byte[frameSize];
+    input.readBytes(encodedFrame);
+    output.add(WireProtocol.decodeFrame(encodedFrame, compression));
   }
 }

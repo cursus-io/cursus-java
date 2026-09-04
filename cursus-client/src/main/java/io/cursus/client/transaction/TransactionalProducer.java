@@ -29,13 +29,69 @@ public class TransactionalProducer implements AutoCloseable {
       int timeoutMs,
       int maxRetries,
       long backoffMs) {
+    this(
+        transactionalId,
+        brokers,
+        null,
+        null,
+        "none",
+        principal,
+        authToken,
+        timeoutMs,
+        maxRetries,
+        backoffMs);
+  }
+
+  public TransactionalProducer(
+      String transactionalId,
+      List<String> brokers,
+      String tlsCertPath,
+      String tlsKeyPath,
+      String compressionType,
+      String principal,
+      String authToken,
+      int timeoutMs,
+      int maxRetries,
+      long backoffMs) {
     if (transactionalId == null || transactionalId.isBlank()) {
       throw new IllegalArgumentException("transactionalId is required");
     }
     this.transactionalId = transactionalId;
-    this.client = new BrokerCommandClient(brokers, timeoutMs, maxRetries, backoffMs);
+    this.client =
+        new BrokerCommandClient(
+            brokers,
+            timeoutMs,
+            maxRetries,
+            backoffMs,
+            tlsCertPath,
+            tlsKeyPath,
+            compressionType,
+            principal,
+            authToken);
     this.principal = principal;
     this.authToken = authToken;
+  }
+
+  public TransactionalProducer(
+      String transactionalId,
+      List<String> brokers,
+      String compressionType,
+      String principal,
+      String authToken,
+      int timeoutMs,
+      int maxRetries,
+      long backoffMs) {
+    this(
+        transactionalId,
+        brokers,
+        null,
+        null,
+        compressionType,
+        principal,
+        authToken,
+        timeoutMs,
+        maxRetries,
+        backoffMs);
   }
 
   public ProtocolDecoder.ProducerSession initProducerId() {

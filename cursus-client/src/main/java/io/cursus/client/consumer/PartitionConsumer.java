@@ -198,14 +198,11 @@ public class PartitionConsumer {
         byte[] responseBytes = sendPlainCommand(consumeTarget, command);
         String response = new String(responseBytes, StandardCharsets.UTF_8);
 
-        if (response.contains("NOT_LEADER LEADER_IS")) {
-          String[] parts = response.split("\\s+");
-          for (int i = 0; i < parts.length; i++) {
-            if ("LEADER_IS".equals(parts[i]) && i + 1 < parts.length) {
-              partitionLeaderAddr = parts[i + 1];
-              log.info("Partition {} leader updated to {}", partitionId, partitionLeaderAddr);
-              break;
-            }
+        if (ProtocolDecoder.isNotLeaderResponse(response)) {
+          String redirected = parseLeaderAddress(response);
+          if (redirected != null) {
+            partitionLeaderAddr = redirected;
+            log.info("Partition {} leader updated to {}", partitionId, partitionLeaderAddr);
           }
           continue;
         }
@@ -303,14 +300,13 @@ public class PartitionConsumer {
           }
 
           String response = new String(responseBytes, StandardCharsets.UTF_8);
-          if (response.contains("NOT_LEADER LEADER_IS")) {
-            String[] parts = response.split("\\s+");
-            for (int i = 0; i < parts.length; i++) {
-              if ("LEADER_IS".equals(parts[i]) && i + 1 < parts.length) {
-                partitionLeaderAddr = parts[i + 1];
-                break;
-              }
+          if (ProtocolDecoder.isNotLeaderResponse(response)) {
+            String redirected = parseLeaderAddress(response);
+            if (redirected == null) {
+              log.warn("Partition {} redirect omitted leader: {}", partitionId, response);
+              return;
             }
+            partitionLeaderAddr = redirected;
             partitionHandler.setPushHandler(null);
             connectionManager.connectPartitionToAddress(partitionId, partitionLeaderAddr);
             partitionHandler = connectionManager.getPartitionHandler(partitionId);
@@ -357,6 +353,8 @@ public class PartitionConsumer {
                 CommandBuilder.stream(
                     config.getTopic(), partitionId, group, currentOffset.get(), generation, member);
             connectionManager.sendCommandOnPartitionOneWay(partitionId, restream);
+            CursusClientHandler refreshed = connectionManager.getPartitionHandler(partitionId);
+            if (refreshed != null) partitionHandler = refreshed;
             continue;
           }
           if (ProtocolDecoder.isRebalanceRequired(response)) {
@@ -389,6 +387,12 @@ public class PartitionConsumer {
             return;
           } catch (Exception re) {
             log.error("Failed to re-establish stream for partition {}", partitionId, re);
+            boolean queued =
+                pushQueue.offer(
+                    "ERROR: connection_closed class=availability retryable=true"
+                        .getBytes(StandardCharsets.UTF_8));
+            if (!queued)
+              log.error("Failed to queue stream reconnect for partition {}", partitionId);
           }
         }
       }
@@ -413,39 +417,21 @@ public class PartitionConsumer {
     return host != null && port != null ? host + ":" + port : null;
   }
 
-  private byte[] sendPlainCommand(String addr, String command) throws Exception {
-    String[] parts = addr.split(":");
-    String host = parts[0];
-    int port = Integer.parseInt(parts[1]);
-
-    try (java.net.Socket socket = new java.net.Socket(host, port)) {
-      socket.setSoTimeout((int) config.getSessionTimeoutMs());
-      java.io.OutputStream out = socket.getOutputStream();
-      java.io.InputStream in = socket.getInputStream();
-
-      // Wrap with encode_message("", cmd) — 2-byte topic length prefix (0x0000) + command
-      byte[] cmdBytes = command.getBytes(StandardCharsets.UTF_8);
-      byte[] payload = new byte[2 + cmdBytes.length];
-      // payload[0] and payload[1] are already 0x00 (empty topic length)
-      System.arraycopy(cmdBytes, 0, payload, 2, cmdBytes.length);
-
-      byte[] frame = new byte[4 + payload.length];
-      frame[0] = (byte) (payload.length >> 24);
-      frame[1] = (byte) (payload.length >> 16);
-      frame[2] = (byte) (payload.length >> 8);
-      frame[3] = (byte) (payload.length);
-      System.arraycopy(payload, 0, frame, 4, payload.length);
-      out.write(frame);
-      out.flush();
-
-      byte[] lenBuf = in.readNBytes(4);
-      int respLen =
-          ((lenBuf[0] & 0xFF) << 24)
-              | ((lenBuf[1] & 0xFF) << 16)
-              | ((lenBuf[2] & 0xFF) << 8)
-              | (lenBuf[3] & 0xFF);
-      return in.readNBytes(respLen);
+  private String parseLeaderAddress(String response) {
+    String[] parts = response.split("\\s+");
+    for (int i = 0; i < parts.length; i++) {
+      if (parts[i].startsWith("leader=") && parts[i].length() > "leader=".length()) {
+        return parts[i].substring("leader=".length());
+      }
+      if ("LEADER_IS".equals(parts[i]) && i + 1 < parts.length) return parts[i + 1];
     }
+    return null;
+  }
+
+  private byte[] sendPlainCommand(String addr, String command) throws Exception {
+    return connectionManager
+        .sendToAddress(addr, command)
+        .get(config.getSessionTimeoutMs(), TimeUnit.MILLISECONDS);
   }
 
   public void markCommitted(long offset) {

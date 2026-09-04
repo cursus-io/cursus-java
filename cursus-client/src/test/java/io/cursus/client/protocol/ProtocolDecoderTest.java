@@ -39,6 +39,22 @@ class ProtocolDecoderTest {
   }
 
   @Test
+  void decodeStructuredReplicationError() {
+    String error =
+        "ERROR: replication_unavailable class=availability retryable=true partition=2 topic=orders";
+
+    AckResponse ack = ProtocolDecoder.decodeAckResponse(error.getBytes(StandardCharsets.UTF_8));
+
+    assertThat(ack.getStatus()).isEqualTo("ERROR");
+    assertThat(ack.getErrorCode()).isEqualTo("replication_unavailable");
+    assertThat(ack.getErrorClass()).isEqualTo("availability");
+    assertThat(ack.isRetryable()).isTrue();
+    assertThat(ack.getErrorFields())
+        .containsEntry("partition", "2")
+        .containsEntry("topic", "orders");
+  }
+
+  @Test
   void roundTripBatchEncodeAndDecode() {
     CursusMessage original =
         CursusMessage.builder()
@@ -103,6 +119,47 @@ class ProtocolDecoderTest {
     assertThat(decoded.get(1).getPayload()).isEqualTo("second");
     assertThat(decoded.get(0).getSeqNum()).isEqualTo(10);
     assertThat(decoded.get(1).getSeqNum()).isEqualTo(11);
+  }
+
+  @Test
+  void roundTripBatchPreservesAllWireV2RecordFields() {
+    CursusMessage original =
+        CursusMessage.builder()
+            .producerId("p1")
+            .seqNum(7)
+            .payload("event")
+            .key("aggregate-1")
+            .offset(9)
+            .epoch(3)
+            .eventType("Updated")
+            .schemaVersion(2)
+            .aggregateVersion(5)
+            .metadata("{\"trace\":1}")
+            .timestamp(123456)
+            .transactionalId("txn-1")
+            .transactionState("aborted")
+            .transactionMarker("abort")
+            .controlBatchType("transaction")
+            .controlBatchVersion(2)
+            .controlBatchCoordinatorEpoch(-4)
+            .controlBatchKey(new byte[] {0, 1})
+            .controlBatchValue(new byte[] {2, 3})
+            .build();
+
+    CursusMessage decoded =
+        ProtocolDecoder.decodeBatchMessages(
+                ProtocolEncoder.encodeBatchMessages("topic", 3, List.of(original), "-1", true, 7))
+            .get(0);
+
+    assertThat(decoded.getTimestamp()).isEqualTo(123456);
+    assertThat(decoded.getTransactionalId()).isEqualTo("txn-1");
+    assertThat(decoded.getTransactionState()).isEqualTo("aborted");
+    assertThat(decoded.getTransactionMarker()).isEqualTo("abort");
+    assertThat(decoded.getControlBatchType()).isEqualTo("transaction");
+    assertThat(decoded.getControlBatchVersion()).isEqualTo(2);
+    assertThat(decoded.getControlBatchCoordinatorEpoch()).isEqualTo(-4);
+    assertThat(decoded.getControlBatchKey()).containsExactly(0, 1);
+    assertThat(decoded.getControlBatchValue()).containsExactly(2, 3);
   }
 
   @Test

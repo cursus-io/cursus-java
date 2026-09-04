@@ -3,9 +3,9 @@ package io.cursus.client.eventstore;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
-import java.io.DataInputStream;
-import java.io.DataOutputStream;
-import java.io.IOException;
+import io.cursus.client.protocol.WireProtocol;
+import java.io.InputStream;
+import java.io.OutputStream;
 import java.lang.reflect.InvocationTargetException;
 import java.lang.reflect.Method;
 import java.net.ServerSocket;
@@ -13,6 +13,7 @@ import java.net.Socket;
 import java.net.SocketTimeoutException;
 import java.nio.charset.StandardCharsets;
 import java.util.List;
+import java.util.Map;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
@@ -59,25 +60,37 @@ class CursusEventStoreTest {
             executor.submit(
                 () -> {
                   try (Socket client = server.accept()) {
-                    assertThat(readCommand(client)).startsWith("READ_STREAM ");
-                    writeFrame(client, "{\"status\":\"OK\",\"snapshot\":null,\"count\":0}");
+                    WireProtocol.Frame readRequest = negotiateAndReadRequest(client);
+                    assertThat(readRequest.command()).isEqualTo(WireProtocol.Command.READ_STREAM);
+                    writeResponse(
+                        client,
+                        readRequest,
+                        WireProtocol.Status.OK,
+                        "{\"status\":\"OK\",\"snapshot\":null,\"count\":0}"
+                            .getBytes(StandardCharsets.UTF_8));
                     envelopeSent.countDown();
                     assertThat(probeSecondCommand.await(5, TimeUnit.SECONDS)).isTrue();
 
                     client.setSoTimeout(250);
                     boolean commandInterleaved;
                     try {
-                      readCommand(client);
+                      readRequest(client);
                       commandInterleaved = true;
                     } catch (SocketTimeoutException expected) {
                       commandInterleaved = false;
                     }
 
                     client.setSoTimeout(5000);
-                    writeFrame(client, new byte[0]);
+                    writeResponse(client, readRequest, WireProtocol.Status.STREAM_END, new byte[0]);
                     if (!commandInterleaved) {
-                      assertThat(readCommand(client)).startsWith("STREAM_VERSION ");
-                      writeFrame(client, "OK version=0");
+                      WireProtocol.Frame versionRequest = readRequest(client);
+                      assertThat(versionRequest.command())
+                          .isEqualTo(WireProtocol.Command.STREAM_VERSION);
+                      writeResponse(
+                          client,
+                          versionRequest,
+                          WireProtocol.Status.OK,
+                          "OK version=0".getBytes(StandardCharsets.UTF_8));
                     }
                     return commandInterleaved;
                   }
@@ -119,28 +132,40 @@ class CursusEventStoreTest {
                   boolean commandInterleaved;
                   String initialRead;
                   try (Socket first = server.accept()) {
-                    initialRead = readCommand(first);
+                    WireProtocol.Frame initialRequest = negotiateAndReadRequest(first);
+                    initialRead = initialRequest.command().name();
                     firstReadSeen.countDown();
                     assertThat(probeConcurrentCommand.await(5, TimeUnit.SECONDS)).isTrue();
 
                     first.setSoTimeout(250);
                     try {
-                      readCommand(first);
+                      readRequest(first);
                       commandInterleaved = true;
                     } catch (SocketTimeoutException expected) {
                       commandInterleaved = false;
                     }
-                    writeFrame(
-                        first, "{\"status\":\"ERROR\",\"error\":\"topic_not_found topic=orders\"}");
+                    writeError(first, initialRequest, "topic_not_found", "topic=orders");
                   }
 
                   try (Socket retried = server.accept()) {
                     retried.setSoTimeout(5000);
-                    String retryRead = readCommand(retried);
-                    writeFrame(retried, "{\"status\":\"OK\",\"snapshot\":null,\"count\":0}");
-                    writeFrame(retried, new byte[0]);
-                    String version = readCommand(retried);
-                    writeFrame(retried, "OK version=0");
+                    WireProtocol.Frame retryRequest = negotiateAndReadRequest(retried);
+                    String retryRead = retryRequest.command().name();
+                    writeResponse(
+                        retried,
+                        retryRequest,
+                        WireProtocol.Status.OK,
+                        "{\"status\":\"OK\",\"snapshot\":null,\"count\":0}"
+                            .getBytes(StandardCharsets.UTF_8));
+                    writeResponse(
+                        retried, retryRequest, WireProtocol.Status.STREAM_END, new byte[0]);
+                    WireProtocol.Frame versionRequest = readRequest(retried);
+                    String version = versionRequest.command().name();
+                    writeResponse(
+                        retried,
+                        versionRequest,
+                        WireProtocol.Status.OK,
+                        "OK version=0".getBytes(StandardCharsets.UTF_8));
                     return List.of(
                         initialRead, Boolean.toString(commandInterleaved), retryRead, version);
                   }
@@ -162,10 +187,10 @@ class CursusEventStoreTest {
         assertThat(broker.get(5, TimeUnit.SECONDS))
             .satisfies(
                 commands -> {
-                  assertThat(commands.get(0)).startsWith("READ_STREAM ");
+                  assertThat(commands.get(0)).isEqualTo("READ_STREAM");
                   assertThat(commands.get(1)).isEqualTo("false");
-                  assertThat(commands.get(2)).startsWith("READ_STREAM ");
-                  assertThat(commands.get(3)).startsWith("STREAM_VERSION ");
+                  assertThat(commands.get(2)).isEqualTo("READ_STREAM");
+                  assertThat(commands.get(3)).isEqualTo("STREAM_VERSION");
                 });
       } finally {
         executor.shutdownNow();
@@ -173,25 +198,63 @@ class CursusEventStoreTest {
     }
   }
 
-  private static String readCommand(Socket socket) throws IOException {
-    DataInputStream in = new DataInputStream(socket.getInputStream());
-    int length = in.readInt();
-    byte[] payload = in.readNBytes(length);
-    if (payload.length != length || length < 2) {
-      throw new IOException("incomplete command frame");
-    }
-    return new String(payload, 2, length - 2, StandardCharsets.UTF_8);
+  private static WireProtocol.Frame negotiateAndReadRequest(Socket socket) throws Exception {
+    WireProtocol.Frame negotiation = readFrame(socket.getInputStream());
+    assertThat(negotiation.kind()).isEqualTo(WireProtocol.Kind.NEGOTIATION_REQUEST);
+    writeFrame(
+        socket.getOutputStream(),
+        new WireProtocol.Frame(
+            WireProtocol.Kind.NEGOTIATION_RESPONSE,
+            WireProtocol.Command.NEGOTIATE,
+            WireProtocol.Status.OK,
+            negotiation.requestId(),
+            new byte[] {0, 2, 0}));
+    return readRequest(socket);
   }
 
-  private static void writeFrame(Socket socket, String payload) throws IOException {
-    writeFrame(socket, payload.getBytes(StandardCharsets.UTF_8));
+  private static WireProtocol.Frame readRequest(Socket socket) throws Exception {
+    WireProtocol.Frame request = readFrame(socket.getInputStream());
+    assertThat(request.kind()).isEqualTo(WireProtocol.Kind.REQUEST);
+    return request;
   }
 
-  private static void writeFrame(Socket socket, byte[] payload) throws IOException {
-    DataOutputStream out = new DataOutputStream(socket.getOutputStream());
-    out.writeInt(payload.length);
-    out.write(payload);
-    out.flush();
+  private static WireProtocol.Frame readFrame(InputStream input) throws Exception {
+    byte[] header = input.readNBytes(WireProtocol.HEADER_SIZE);
+    int payloadSize = WireProtocol.encodedFrameSize(header);
+    byte[] payload = input.readNBytes(payloadSize);
+    byte[] encoded = new byte[header.length + payload.length];
+    System.arraycopy(header, 0, encoded, 0, header.length);
+    System.arraycopy(payload, 0, encoded, header.length, payload.length);
+    return WireProtocol.decodeFrame(encoded, WireProtocol.Compression.NONE);
+  }
+
+  private static void writeResponse(
+      Socket socket, WireProtocol.Frame request, WireProtocol.Status status, byte[] payload)
+      throws Exception {
+    writeFrame(
+        socket.getOutputStream(),
+        new WireProtocol.Frame(
+            status == WireProtocol.Status.STREAM_END
+                ? WireProtocol.Kind.STREAM
+                : WireProtocol.Kind.RESPONSE,
+            request.command(),
+            status,
+            request.requestId(),
+            payload));
+  }
+
+  private static void writeError(
+      Socket socket, WireProtocol.Frame request, String code, String message) throws Exception {
+    byte[] payload =
+        WireProtocol.encodeError(
+            new WireProtocol.ErrorPayload(
+                code, WireProtocol.ErrorClass.NOT_FOUND, true, message, Map.of()));
+    writeResponse(socket, request, WireProtocol.Status.ERROR, payload);
+  }
+
+  private static void writeFrame(OutputStream output, WireProtocol.Frame frame) throws Exception {
+    output.write(WireProtocol.encodeFrame(frame, WireProtocol.Compression.NONE));
+    output.flush();
   }
 
   private static AppendResult parseAppendResponse(CursusEventStore store, String response)

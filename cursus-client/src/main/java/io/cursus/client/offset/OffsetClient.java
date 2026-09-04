@@ -21,9 +21,52 @@ public class OffsetClient {
       int timeoutMs,
       int maxRetries,
       long backoffMs) {
-    this.client = new BrokerCommandClient(brokers, timeoutMs, maxRetries, backoffMs);
+    this(brokers, null, null, "none", principal, authToken, timeoutMs, maxRetries, backoffMs);
+  }
+
+  public OffsetClient(
+      List<String> brokers,
+      String tlsCertPath,
+      String tlsKeyPath,
+      String compressionType,
+      String principal,
+      String authToken,
+      int timeoutMs,
+      int maxRetries,
+      long backoffMs) {
+    this.client =
+        new BrokerCommandClient(
+            brokers,
+            timeoutMs,
+            maxRetries,
+            backoffMs,
+            tlsCertPath,
+            tlsKeyPath,
+            compressionType,
+            principal,
+            authToken);
     this.principal = principal;
     this.authToken = authToken;
+  }
+
+  public OffsetClient(
+      List<String> brokers,
+      String compressionType,
+      String principal,
+      String authToken,
+      int timeoutMs,
+      int maxRetries,
+      long backoffMs) {
+    this(
+        brokers,
+        null,
+        null,
+        compressionType,
+        principal,
+        authToken,
+        timeoutMs,
+        maxRetries,
+        backoffMs);
   }
 
   public List<ProtocolDecoder.PartitionOffsetRange> listOffsets(String topic) {
