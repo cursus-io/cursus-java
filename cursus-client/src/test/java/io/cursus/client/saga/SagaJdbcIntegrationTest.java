@@ -99,6 +99,30 @@ class SagaJdbcIntegrationTest {
       assertThat(List.of(rows.getInt(1), rows.getInt(2), rows.getInt(3), rows.getInt(4), rows.getInt(5)))
           .containsExactly(1, 1, 1, 5, 5);
     }
+    String runId;
+    try (var connection = dataSource.getConnection();
+        var statement =
+            connection.prepareStatement(
+                "SELECT run_id FROM cursus_saga_history WHERE saga_id=? ORDER BY sequence LIMIT 1")) {
+      statement.setString(1, id);
+      try (var rows = statement.executeQuery()) {
+        rows.next();
+        runId = rows.getString(1);
+      }
+    }
+    String collision =
+        "INSERT INTO cursus_saga_history "
+            + "(history_event_id,history_schema_version,environment_id,service_name,saga_type,saga_id,"
+            + "run_id,sequence,event_type,occurred_at,recorded_at) "
+            + "VALUES (?,1,'test','orders','java-contract',?,?,1,'run.started',"
+            + (postgres ? "NOW(),NOW())" : "UTC_TIMESTAMP(6),UTC_TIMESTAMP(6))");
+    try (var connection = dataSource.getConnection();
+        var statement = connection.prepareStatement(collision)) {
+      statement.setString(1, UUID.randomUUID().toString());
+      statement.setString(2, id);
+      statement.setString(3, runId);
+      assertThatThrownBy(statement::executeUpdate).isInstanceOf(Exception.class);
+    }
 
     RecordingPublisher publisher = new RecordingPublisher();
     JdbcHistoryOutboxPublisher worker =
