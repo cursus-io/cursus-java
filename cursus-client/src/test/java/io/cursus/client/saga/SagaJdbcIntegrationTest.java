@@ -1,8 +1,13 @@
 package io.cursus.client.saga;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
+import com.fasterxml.jackson.core.type.TypeReference;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import com.mysql.cj.jdbc.MysqlDataSource;
+import io.cursus.client.saga.jdbc.JdbcHistoryOutboxPublisher;
+import io.cursus.client.saga.jdbc.JdbcSagaTransaction;
 import io.cursus.client.sagamysql.MySqlSagaMigrations;
 import io.cursus.client.sagamysql.MySqlSagaTransaction;
 import io.cursus.client.sagapg.PostgresSagaMigrations;
@@ -10,7 +15,9 @@ import io.cursus.client.sagapg.PostgresSagaTransaction;
 import java.net.URI;
 import java.net.URLEncoder;
 import java.nio.charset.StandardCharsets;
+import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
 import java.util.UUID;
 import javax.sql.DataSource;
 import org.junit.jupiter.api.Test;
@@ -18,6 +25,19 @@ import org.junit.jupiter.api.condition.EnabledIfEnvironmentVariable;
 import org.postgresql.ds.PGSimpleDataSource;
 
 class SagaJdbcIntegrationTest {
+  private static final ObjectMapper JSON = new ObjectMapper();
+
+  private static final class RecordingPublisher implements JdbcHistoryOutboxPublisher.Publisher {
+    private int failures = 1;
+    private final List<String> payloads = new ArrayList<>();
+
+    @Override
+    public void publish(String topic, String payload) {
+      payloads.add(payload);
+      if (failures-- > 0) throw new IllegalStateException("broker unavailable");
+    }
+  }
+
   @Test
   @EnabledIfEnvironmentVariable(named = "CURSUS_SAGA_POSTGRES_DSN", matches = ".+")
   void persistsPostgresHistoryAndOutboxAtomically() throws Exception {
@@ -58,10 +78,64 @@ class SagaJdbcIntegrationTest {
         var statement = connection.createStatement();
         var rows =
             statement.executeQuery(
-                "SELECT count(*) FROM cursus_saga_history WHERE saga_id='" + id + "'")) {
+                "SELECT "
+                    + "(SELECT count(*) FROM cursus_saga_state WHERE saga_id='"
+                    + id
+                    + "'),"
+                    + "(SELECT count(*) FROM cursus_saga_inbox WHERE event_id='event-"
+                    + id
+                    + "'),"
+                    + "(SELECT count(*) FROM cursus_saga_outbox WHERE saga_id='"
+                    + id
+                    + "'),"
+                    + "(SELECT count(*) FROM cursus_saga_history WHERE saga_id='"
+                    + id
+                    + "'),"
+                    + "(SELECT count(*) FROM cursus_saga_history_outbox o JOIN cursus_saga_history h "
+                    + "ON h.history_event_id=o.history_event_id WHERE h.saga_id='"
+                    + id
+                    + "')")) {
       rows.next();
-      assertThat(rows.getInt(1)).isGreaterThan(0);
+      assertThat(List.of(rows.getInt(1), rows.getInt(2), rows.getInt(3), rows.getInt(4), rows.getInt(5)))
+          .containsExactly(1, 1, 1, 5, 5);
     }
+
+    RecordingPublisher publisher = new RecordingPublisher();
+    JdbcHistoryOutboxPublisher worker =
+        new JdbcHistoryOutboxPublisher(
+            dataSource,
+            publisher,
+            postgres ? JdbcSagaTransaction.Dialect.POSTGRES : JdbcSagaTransaction.Dialect.MYSQL);
+    assertThatThrownBy(() -> worker.publishPending(1)).hasMessageContaining("broker unavailable");
+    String historyEventId = historyEventId(publisher.payloads.get(0));
+    try (var connection = dataSource.getConnection();
+        var statement =
+            connection.prepareStatement(
+                "UPDATE cursus_saga_history_outbox SET status='PUBLISHED' WHERE history_event_id IN "
+                    + "(SELECT history_event_id FROM cursus_saga_history WHERE saga_id=?) "
+                    + "AND history_event_id<>?")) {
+      statement.setString(1, id);
+      statement.setString(2, historyEventId);
+      statement.executeUpdate();
+    }
+    assertThat(worker.publishPending(1)).isEqualTo(1);
+    assertThat(historyEventId(publisher.payloads.get(1))).isEqualTo(historyEventId);
+    try (var connection = dataSource.getConnection();
+        var statement =
+            connection.prepareStatement(
+                "SELECT status,attempts FROM cursus_saga_history_outbox WHERE history_event_id=?")) {
+      statement.setString(1, historyEventId);
+      try (var rows = statement.executeQuery()) {
+        rows.next();
+        assertThat(rows.getString(1)).isEqualTo("PUBLISHED");
+        assertThat(rows.getInt(2)).isEqualTo(2);
+      }
+    }
+  }
+
+  private static String historyEventId(String payload) throws Exception {
+    Map<String, Object> event = JSON.readValue(payload, new TypeReference<>() {});
+    return (String) event.get("history_event_id");
   }
 
   private static String jdbcUrl(String dsn) {
