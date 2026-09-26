@@ -74,7 +74,9 @@ public final class BrokerSagaRuntime {
       SagaState state = new SagaState(input.sagaId(), config.sagaType(), input.sagaId());
       state.setRunId(input.runId());
       state.setCorrelationId(empty(input.event().correlationId()));
-      record = new StateRecord(config.sagaType(), input.sagaId(), input.runId(), state, new ArrayList<>(), 0);
+      record =
+          new StateRecord(
+              config.sagaType(), input.sagaId(), input.runId(), state, new ArrayList<>(), 0);
     }
 
     TransitionResult result;
@@ -90,7 +92,9 @@ public final class BrokerSagaRuntime {
     drafts.addAll(result.history());
     List<SagaCommand> commands = new ArrayList<>();
     for (int index = 0; index < result.commands().size(); index++) {
-      SagaCommand command = prepareCommand(record.state, input.event().eventId(), index, result.commands().get(index));
+      SagaCommand command =
+          prepareCommand(
+              record.state, input.event().eventId(), index, result.commands().get(index));
       commands.add(command);
       drafts.add(
           new HistoryDraft(
@@ -113,7 +117,8 @@ public final class BrokerSagaRuntime {
   private StateRecord load(String sagaId, String runId) {
     StreamData stream = stateStore.readStream(streamKey(sagaId, runId));
     if (stream.getEvents().isEmpty()) return null;
-    StateRecord record = StateRecord.fromJson(stream.getEvents().get(stream.getEvents().size() - 1).getPayload());
+    StateRecord record =
+        StateRecord.fromJson(stream.getEvents().get(stream.getEvents().size() - 1).getPayload());
     if (!config.sagaType().equals(record.sagaType)
         || !sagaId.equals(record.sagaId)
         || !runId.equals(record.runId)) {
@@ -123,7 +128,8 @@ public final class BrokerSagaRuntime {
     return record;
   }
 
-  private SagaCommand prepareCommand(SagaState state, String causationId, int index, SagaCommand command) {
+  private SagaCommand prepareCommand(
+      SagaState state, String causationId, int index, SagaCommand command) {
     String effectId = command.getEffectId();
     if (effectId == null || effectId.isBlank()) effectId = causationId + ":" + index;
     String commandId = command.getCommandId();
@@ -138,8 +144,12 @@ public final class BrokerSagaRuntime {
         .commandId(commandId)
         .sagaType(config.sagaType())
         .sagaId(state.getSagaId())
-        .correlationId(empty(command.getCorrelationId()).isEmpty() ? state.getCorrelationId() : command.getCorrelationId())
-        .causationId(empty(command.getCausationId()).isEmpty() ? causationId : command.getCausationId());
+        .correlationId(
+            empty(command.getCorrelationId()).isEmpty()
+                ? state.getCorrelationId()
+                : command.getCorrelationId())
+        .causationId(
+            empty(command.getCausationId()).isEmpty() ? causationId : command.getCausationId());
     SagaState.EffectState effect = state.getEffects().get(effectId);
     if (effect == null) effect = new SagaState.EffectState(effectId, command.getType());
     effect.setStepId(command.getType());
@@ -207,7 +217,8 @@ public final class BrokerSagaRuntime {
                     empty(cause.getMessage()))));
     transaction.recordFailure(
         input,
-        new BrokerSagaTransaction.Transition(record.toJson(), currentVersion + 1, List.of(), history));
+        new BrokerSagaTransaction.Transition(
+            record.toJson(), currentVersion + 1, List.of(), history));
   }
 
   private static final class StateRecord {
@@ -258,7 +269,8 @@ public final class BrokerSagaRuntime {
         @SuppressWarnings("unchecked")
         Map<String, Object> state = (Map<String, Object>) value.get("state");
         @SuppressWarnings("unchecked")
-        List<String> processed = (List<String>) value.getOrDefault("processed_event_ids", List.of());
+        List<String> processed =
+            (List<String>) value.getOrDefault("processed_event_ids", List.of());
         return new StateRecord(
             (String) value.get("saga_type"),
             (String) value.get("saga_id"),
@@ -347,7 +359,8 @@ public final class BrokerSagaRuntime {
     }
     Map<String, Object> compensation = (Map<String, Object>) value.get("compensation");
     if (compensation != null) {
-      SagaState.CompensationState result = new SagaState.CompensationState(string(compensation, "step_id"));
+      SagaState.CompensationState result =
+          new SagaState.CompensationState(string(compensation, "step_id"));
       result.setStatus(string(compensation, "status"));
       result.setAttempts(number(compensation, "attempts").intValue());
       result.setLastError(string(compensation, "last_error"));

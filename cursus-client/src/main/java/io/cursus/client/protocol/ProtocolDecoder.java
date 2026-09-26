@@ -425,7 +425,8 @@ public final class ProtocolDecoder {
       throw new CursusProtocolException("Unsupported Wire v2 record version: " + version);
     }
     long presence = reader.uint64();
-    long knownMask = version == LEGACY_RECORD_VERSION ? LEGACY_RECORD_KNOWN_MASK : RECORD_KNOWN_MASK;
+    long knownMask =
+        version == LEGACY_RECORD_VERSION ? LEGACY_RECORD_KNOWN_MASK : RECORD_KNOWN_MASK;
     if ((presence & ~knownMask) != 0) {
       throw new CursusProtocolException("Wire v2 record contains unknown presence bits");
     }
@@ -464,7 +465,8 @@ public final class ProtocolDecoder {
     long controlCoordinatorEpoch = (presence & (1L << 12)) != 0 ? reader.uint64() : 0;
     byte[] controlKey = (presence & (1L << 13)) != 0 ? reader.bytes() : null;
     byte[] controlValue = (presence & (1L << 14)) != 0 ? reader.bytes() : null;
-    String eventId = version == RECORD_VERSION && (presence & (1L << 15)) != 0 ? reader.string() : null;
+    String eventId =
+        version == RECORD_VERSION && (presence & (1L << 15)) != 0 ? reader.string() : null;
     String payloadDigest =
         version == RECORD_VERSION && (presence & (1L << 16)) != 0 ? reader.string() : null;
     reader.finish();

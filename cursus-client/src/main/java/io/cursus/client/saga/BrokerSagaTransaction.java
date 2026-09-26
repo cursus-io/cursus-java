@@ -14,10 +14,10 @@ import java.util.UUID;
 /**
  * DB-free Saga transaction boundary.
  *
- * <p>The caller recovers and serializes its run state from the public state event stream, then passes
- * one transition here. This class atomically appends that state event, publishes command and history
- * records, and acknowledges the consumed inbox offset through the Cursus broker transaction.
- * Configure the source {@code CursusConsumer} with {@code enableAutoCommit(false)}.
+ * <p>The caller recovers and serializes its run state from the public state event stream, then
+ * passes one transition here. This class atomically appends that state event, publishes command and
+ * history records, and acknowledges the consumed inbox offset through the Cursus broker
+ * transaction. Configure the source {@code CursusConsumer} with {@code enableAutoCommit(false)}.
  */
 public final class BrokerSagaTransaction {
   private static final ObjectMapper JSON = new ObjectMapper();
@@ -46,7 +46,10 @@ public final class BrokerSagaTransaction {
       if (sagaType == null || sagaType.isBlank() || sagaType.matches(".*\\s.*")) {
         throw new IllegalArgumentException("sagaType is required and cannot contain whitespace");
       }
-      if (environmentId == null || environmentId.isBlank() || serviceName == null || serviceName.isBlank()) {
+      if (environmentId == null
+          || environmentId.isBlank()
+          || serviceName == null
+          || serviceName.isBlank()) {
         throw new IllegalArgumentException("environmentId and serviceName are required");
       }
       if (topics == null) topics = Topics.defaults();
@@ -76,10 +79,18 @@ public final class BrokerSagaTransaction {
       if (sourceTopic == null || sourceTopic.isBlank() || sourcePartition < 0 || sourceOffset < 0) {
         throw new IllegalArgumentException("input topic, partition, and offset are required");
       }
-      if (group == null || group.isBlank() || member == null || member.isBlank() || generation < 0) {
+      if (group == null
+          || group.isBlank()
+          || member == null
+          || member.isBlank()
+          || generation < 0) {
         throw new IllegalArgumentException("active consumer membership is required");
       }
-      if (event == null || event.eventId() == null || event.eventId().isBlank() || event.eventType() == null || event.eventType().isBlank()) {
+      if (event == null
+          || event.eventId() == null
+          || event.eventId().isBlank()
+          || event.eventType() == null
+          || event.eventType().isBlank()) {
         throw new IllegalArgumentException("source event identity is required");
       }
     }
@@ -124,7 +135,8 @@ public final class BrokerSagaTransaction {
       List<SagaHistoryEvent> history) {
     public Transition {
       if (statePayload == null || statePayload.isBlank() || expectedStateVersion < 1) {
-        throw new IllegalArgumentException("statePayload and positive expectedStateVersion are required");
+        throw new IllegalArgumentException(
+            "statePayload and positive expectedStateVersion are required");
       }
       commands = commands == null ? List.of() : List.copyOf(commands);
       history = history == null ? List.of() : List.copyOf(history);
@@ -151,8 +163,8 @@ public final class BrokerSagaTransaction {
 
   /**
    * Applies a normal transition and commits the source offset in the same broker transaction.
-   * Publishing a command emits only command.enqueued; business success/failure must be represented by
-   * an explicit later state transition and history record.
+   * Publishing a command emits only command.enqueued; business success/failure must be represented
+   * by an explicit later state transition and history record.
    */
   public void apply(Input input, Transition transition) {
     TransactionalProducer producer = producers.create(transactionId(input, "apply"));
@@ -172,8 +184,7 @@ public final class BrokerSagaTransaction {
         producer.publish(config.topics().commands(), -1, command.toJson(), command.commandId());
       }
       for (SagaHistoryEvent event : transition.history()) {
-        producer.publish(
-            config.topics().history(), -1, event.toJson(), event.getHistoryEventId());
+        producer.publish(config.topics().history(), -1, event.toJson(), event.getHistoryEventId());
       }
       producer.sendOffsetsToTransaction(
           input.sourceTopic(),
@@ -188,14 +199,17 @@ public final class BrokerSagaTransaction {
         try {
           producer.abortTransaction();
         } catch (RuntimeException ignored) {
-          // Preserve the original transition error; the broker will expire/fence the open transaction.
+          // Preserve the original transition error; the broker will expire/fence the open
+          // transaction.
         }
       }
       producer.close();
     }
   }
 
-  /** Acknowledge an already-recorded inbox event without emitting a second state or history event. */
+  /**
+   * Acknowledge an already-recorded inbox event without emitting a second state or history event.
+   */
   public void acknowledgeDuplicate(Input input) {
     TransactionalProducer producer = producers.create(transactionId(input, "duplicate"));
     boolean committed = false;
@@ -221,8 +235,9 @@ public final class BrokerSagaTransaction {
   }
 
   /**
-   * Persists a handler-failure state and history record without its source offset. This is the required
-   * fresh transaction after the successful transition has rolled back, so delivery remains retryable.
+   * Persists a handler-failure state and history record without its source offset. This is the
+   * required fresh transaction after the successful transition has rolled back, so delivery remains
+   * retryable.
    */
   public void recordFailure(Input input, Transition transition) {
     TransactionalProducer producer = producers.create(transactionId(input, "failure"));
@@ -238,8 +253,7 @@ public final class BrokerSagaTransaction {
           1,
           "");
       for (SagaHistoryEvent event : transition.history()) {
-        producer.publish(
-            config.topics().history(), -1, event.toJson(), event.getHistoryEventId());
+        producer.publish(config.topics().history(), -1, event.toJson(), event.getHistoryEventId());
       }
       producer.commitTransaction();
       committed = true;
@@ -285,7 +299,12 @@ public final class BrokerSagaTransaction {
     Instant now = Instant.now();
     return SagaHistoryEvent.builder()
         .historyEventId(
-            deterministicId("history", config.sagaType(), input.sagaId(), input.runId(), Long.toString(sequence))
+            deterministicId(
+                    "history",
+                    config.sagaType(),
+                    input.sagaId(),
+                    input.runId(),
+                    Long.toString(sequence))
                 .toString())
         .environmentId(config.environmentId())
         .serviceName(config.serviceName())
@@ -327,7 +346,8 @@ public final class BrokerSagaTransaction {
   }
 
   private static String required(String value) {
-    if (value == null || value.isBlank()) throw new IllegalArgumentException("required broker Saga value is blank");
+    if (value == null || value.isBlank())
+      throw new IllegalArgumentException("required broker Saga value is blank");
     return value;
   }
 

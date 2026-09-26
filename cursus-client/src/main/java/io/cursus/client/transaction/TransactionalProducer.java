@@ -133,7 +133,9 @@ public class TransactionalProducer implements AutoCloseable {
     client.sendTransaction(transactionalId, command);
   }
 
-  /** Stages one optimistic event-store append; it becomes visible only when the transaction commits. */
+  /**
+   * Stages one optimistic event-store append; it becomes visible only when the transaction commits.
+   */
   public void appendStream(
       String topic,
       String key,
