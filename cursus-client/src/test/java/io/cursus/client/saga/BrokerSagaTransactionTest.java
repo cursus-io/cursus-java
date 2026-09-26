@@ -59,7 +59,8 @@ class BrokerSagaTransactionTest {
     SagaState original = new SagaState("order-42", "orders", "order-42");
     original.setRunId("run-1");
     original.setUpdatedAt(Instant.parse("2026-09-26T00:00:00Z"));
-    original.setData(new LinkedHashMap<>(Map.of("nested", new LinkedHashMap<>(Map.of("value", 1)))));
+    original.setData(
+        new LinkedHashMap<>(Map.of("nested", new LinkedHashMap<>(Map.of("value", 1)))));
     SagaState.EffectState effect = new SagaState.EffectState("effect-1", "reserve");
     effect.setAttempts(1);
     original.getEffects().put("effect-1", effect);
