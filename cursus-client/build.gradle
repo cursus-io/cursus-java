@@ -9,7 +9,5 @@ dependencies {
     testImplementation 'io.micrometer:micrometer-core:1.17.0'
 
     testImplementation 'org.assertj:assertj-core:3.27.7'
-    testImplementation 'org.postgresql:postgresql:42.7.5'
-    testImplementation 'com.mysql:mysql-connector-j:9.1.0'
     testRuntimeOnly 'ch.qos.logback:logback-classic:1.5.38'
 }
