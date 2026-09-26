@@ -104,7 +104,9 @@ class SagaJdbcIntegrationTest {
                     + id
                     + "')")) {
       rows.next();
-      assertThat(List.of(rows.getInt(1), rows.getInt(2), rows.getInt(3), rows.getInt(4), rows.getInt(5)))
+      assertThat(
+              List.of(
+                  rows.getInt(1), rows.getInt(2), rows.getInt(3), rows.getInt(4), rows.getInt(5)))
           .containsExactly(1, 1, 1, 5, 5);
     }
     String runId;

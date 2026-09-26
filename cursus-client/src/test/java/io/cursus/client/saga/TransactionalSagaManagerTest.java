@@ -50,7 +50,8 @@ class TransactionalSagaManagerTest {
                   states.put(state.getSagaType() + ":" + state.getSagaId(), state);
                 }
               },
-              command -> commands.add(command), history::add));
+              command -> commands.add(command),
+              history::add));
     }
   }
 

@@ -43,7 +43,10 @@ class SagaHistoryBrokerE2ETest {
     String broker = System.getenv("CURSUS_SAGA_BROKER_ADDR");
     String topic = "java-saga-history-" + UUID.randomUUID().toString().substring(0, 8);
     new AdminClient(new AdminConfig(List.of(broker), 3, 100, 5000, "none", null, null))
-        .createTopic(topic, new TopicDefinitionPatch(1, null, false, false, null, null, null, null, null, null, null));
+        .createTopic(
+            topic,
+            new TopicDefinitionPatch(
+                1, null, false, false, null, null, null, null, null, null, null));
 
     PGSimpleDataSource dataSource = new PGSimpleDataSource();
     dataSource.setUrl(jdbcUrl(System.getenv("CURSUS_SAGA_POSTGRES_DSN")));
@@ -67,7 +70,8 @@ class SagaHistoryBrokerE2ETest {
                     message -> {
                       try {
                         synchronized (received) {
-                          received.add(JSON.readValue(message.getPayload(), new TypeReference<>() {}));
+                          received.add(
+                              JSON.readValue(message.getPayload(), new TypeReference<>() {}));
                         }
                         complete.countDown();
                       } catch (Exception error) {
@@ -107,11 +111,14 @@ class SagaHistoryBrokerE2ETest {
       assertThat(outbox.publishPending(10)).isEqualTo(5);
       assertThat(complete.await(15, TimeUnit.SECONDS)).isTrue();
       assertThat(received).hasSize(5);
-      assertThat(received).extracting(event -> event.get("event_type"))
+      assertThat(received)
+          .extracting(event -> event.get("event_type"))
           .containsExactlyInAnyOrder(
               "run.started", "step.started", "command.enqueued", "step.completed", "run.waiting");
       assertThat(received).extracting(event -> event.get("history_schema_version")).containsOnly(1);
-      assertThat(received).extracting(event -> event.get("history_event_id")).doesNotHaveDuplicates();
+      assertThat(received)
+          .extracting(event -> event.get("history_event_id"))
+          .doesNotHaveDuplicates();
       assertThat(received).extracting(event -> event.get("saga_id")).containsOnly(sagaId);
     } finally {
       consumer.close();

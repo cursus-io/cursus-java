@@ -128,7 +128,9 @@ class BrokerSagaRuntimeE2ETest {
       assertThat(stateStore.readStream(runtime.streamKey(sagaId, runId)).getEvents()).hasSize(1);
     }
 
-    assertThat(consume(broker, commandTopic, 1)).singleElement().satisfies(value -> assertThat(value).contains("command_id"));
+    assertThat(consume(broker, commandTopic, 1))
+        .singleElement()
+        .satisfies(value -> assertThat(value).contains("command_id"));
     List<String> history = consume(broker, historyTopic, 3);
     assertThat(history).hasSize(3);
     assertThat(history)
