@@ -16,6 +16,8 @@ public final class ProtocolEncoder {
 
   private static final int BATCH_VERSION = 2;
   private static final int BATCH_FLAG_IDEMPOTENT = 1;
+  // Keep emitting v2 until v3 is part of the released broker compatibility baseline. The decoder
+  // accepts v3 so clients can safely read records emitted by newer brokers during a rollout.
   private static final int RECORD_VERSION = 2;
   private static final long RECORD_TIMESTAMP = 1L;
   private static final long RECORD_PRODUCER = 1L << 1;

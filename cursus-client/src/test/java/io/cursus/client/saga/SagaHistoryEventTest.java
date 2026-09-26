@@ -7,13 +7,19 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import java.io.InputStream;
 import java.time.Instant;
 import java.util.Map;
+import java.util.Objects;
 import org.junit.jupiter.api.Test;
 
 class SagaHistoryEventTest {
   @Test
   void serializesWithGoV1FixtureSemantics() throws Exception {
-    InputStream input = getClass().getResourceAsStream("/fixtures/saga-history-v1.json");
-    Map<String, Object> expected = new ObjectMapper().readValue(input, new TypeReference<>() {});
+    Map<String, Object> expected;
+    try (InputStream input =
+        Objects.requireNonNull(
+            getClass().getResourceAsStream("/fixtures/saga-history-v1.json"),
+            "Saga history fixture must be present")) {
+      expected = new ObjectMapper().readValue(input, new TypeReference<>() {});
+    }
     SagaHistoryEvent actual =
         SagaHistoryEvent.builder()
             .historyEventId("a4c9f9a0-291e-41e5-babb-3c13b84c4bb4")

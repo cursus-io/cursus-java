@@ -1,11 +1,16 @@
 package io.cursus.client.saga.jdbc;
 
+import edu.umd.cs.findbugs.annotations.SuppressFBWarnings;
 import java.sql.Connection;
 import java.sql.PreparedStatement;
 import java.sql.ResultSet;
 import javax.sql.DataSource;
 
 /** Leased at-least-once history publisher; it never emits command.published. */
+@SuppressFBWarnings(
+    value = "SQL_PREPARED_STATEMENT_GENERATED_FROM_NONCONSTANT_STRING",
+    justification =
+        "The SQL differs only by the fixed PostgreSQL/MySQL dialect; values remain bound through PreparedStatement parameters.")
 public final class JdbcHistoryOutboxPublisher {
   @FunctionalInterface
   public interface Publisher {

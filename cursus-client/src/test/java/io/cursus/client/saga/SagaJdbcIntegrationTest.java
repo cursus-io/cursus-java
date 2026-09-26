@@ -6,6 +6,7 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.mysql.cj.jdbc.MysqlDataSource;
+import edu.umd.cs.findbugs.annotations.SuppressFBWarnings;
 import io.cursus.client.saga.jdbc.JdbcHistoryOutboxPublisher;
 import io.cursus.client.saga.jdbc.JdbcSagaTransaction;
 import io.cursus.client.sagamysql.MySqlSagaMigrations;
@@ -54,6 +55,13 @@ class SagaJdbcIntegrationTest {
     verify(dataSource, false);
   }
 
+  @SuppressFBWarnings(
+      value = {
+        "SQL_NONCONSTANT_STRING_PASSED_TO_EXECUTE",
+        "SQL_PREPARED_STATEMENT_GENERATED_FROM_NONCONSTANT_STRING"
+      },
+      justification =
+          "The SQL differs only by the fixed PostgreSQL/MySQL dialect selected by this test; no input is interpolated into the statements.")
   private void verify(DataSource dataSource, boolean postgres) throws Exception {
     if (postgres) PostgresSagaMigrations.migrate(dataSource);
     else MySqlSagaMigrations.migrate(dataSource);

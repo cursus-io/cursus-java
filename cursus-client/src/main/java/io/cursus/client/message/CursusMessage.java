@@ -29,5 +29,7 @@ public class CursusMessage {
   private long controlBatchCoordinatorEpoch;
   private byte[] controlBatchKey;
   private byte[] controlBatchValue;
+  private String eventId;
+  private String payloadDigest;
   private int retryCount;
 }

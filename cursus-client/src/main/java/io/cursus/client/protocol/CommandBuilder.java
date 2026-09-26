@@ -281,7 +281,7 @@ public final class CommandBuilder {
         + member
         + " generation="
         + generation
-        + " "
+        + " offsets="
         + offsets;
   }
 

@@ -135,7 +135,7 @@ class CommandBuilderTest {
                 "tx-1", "p1", 2, "input", "grp", "m1", 4, "P0:101,P2:202"))
         .isEqualTo(
             "SEND_OFFSETS_TO_TXN transactional_id=tx-1 producerId=p1 epoch=2 topic=input "
-                + "group=grp member=m1 generation=4 P0:101,P2:202");
+                + "group=grp member=m1 generation=4 offsets=P0:101,P2:202");
     assertThat(CommandBuilder.endTxn("tx-1", "p1", 2, false))
         .isEqualTo("END_TXN transactional_id=tx-1 producerId=p1 epoch=2 result=abort");
     assertThat(CommandBuilder.txnStatus("tx-1")).isEqualTo("TXN_STATUS transactional_id=tx-1");

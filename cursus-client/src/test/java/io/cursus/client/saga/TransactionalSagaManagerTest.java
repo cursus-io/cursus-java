@@ -178,6 +178,8 @@ class TransactionalSagaManagerTest {
     assertThat(transaction.history).hasSize(before + 1);
     assertThat(transaction.history.get(before).getEventType())
         .isEqualTo(TransactionalSagaManager.STEP_FAILED);
-    assertThat(transaction.failed).singleElement().contains("event-2:unavailable");
+    assertThat(transaction.failed)
+        .singleElement()
+        .satisfies(value -> assertThat(value).contains("event-2:unavailable"));
   }
 }
