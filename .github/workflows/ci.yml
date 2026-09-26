@@ -68,6 +68,44 @@ jobs:
       - name: SpotBugs Analysis
         run: ./gradlew spotbugsMain
 
+  event-store-e2e:
+    name: Event sourcing Broker E2E
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - name: Checkout Cursus Broker
+        uses: actions/checkout@v7
+        with:
+          repository: cursus-io/cursus
+          # TXN_APPEND_STREAM is introduced by Core PR #209. Return to main after it merges.
+          ref: feat/saga-history-v1-rebased
+          path: cursus-broker
+      - name: Start Cursus Broker
+        working-directory: cursus-broker/test/e2e
+        run: docker compose up --build --detach --wait
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: gradle/actions/setup-gradle@v6
+      - name: Verify EventStore, wire-v2, and broker-native Saga through Cursus
+        env:
+          CURSUS_E2E: "true"
+          CURSUS_E2E_BROKER: localhost:10000
+        run: >-
+          ./gradlew :cursus-client:test
+          --tests '*CursusEventStoreBrokerE2ETest'
+          --tests '*SdkWireV2E2ETest'
+          --tests '*BrokerSagaRuntimeE2ETest'
+      - name: Collect Broker logs
+        if: always()
+        working-directory: cursus-broker/test/e2e
+        run: docker compose logs --no-color
+      - name: Stop Cursus Broker
+        if: always()
+        working-directory: cursus-broker/test/e2e
+        run: docker compose down --volumes --remove-orphans
+
   dco:
     name: DCO
     runs-on: ubuntu-latest

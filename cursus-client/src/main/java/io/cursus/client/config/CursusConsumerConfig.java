@@ -18,6 +18,8 @@ public class CursusConsumerConfig {
   @Builder.Default private ConsumerMode consumerMode = ConsumerMode.STREAMING;
   @Builder.Default private AutoOffsetReset autoOffsetReset = AutoOffsetReset.EARLIEST;
   @Builder.Default private IsolationLevel isolationLevel = IsolationLevel.READ_UNCOMMITTED;
+  // Broker-native processors set false and commit source offsets only through SEND_OFFSETS_TO_TXN.
+  @Builder.Default private boolean enableAutoCommit = true;
   @Builder.Default private Duration autoCommitInterval = Duration.ofSeconds(5);
   @Builder.Default private long sessionTimeoutMs = 30000;
   @Builder.Default private long heartbeatIntervalMs = 3000;

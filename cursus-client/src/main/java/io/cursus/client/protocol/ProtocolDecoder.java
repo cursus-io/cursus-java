@@ -21,7 +21,8 @@ import java.util.Map;
  */
 public final class ProtocolDecoder {
 
-  private static final int RECORD_VERSION = 2;
+  private static final int RECORD_VERSION = 3;
+  private static final int LEGACY_RECORD_VERSION = 2;
   private static final long RECORD_TIMESTAMP = 1L;
   private static final long RECORD_PRODUCER = 1L << 1;
   private static final long RECORD_KEY = 1L << 2;
@@ -29,7 +30,8 @@ public final class ProtocolDecoder {
   private static final long RECORD_SCHEMA_VERSION = 1L << 4;
   private static final long RECORD_AGGREGATE_VERSION = 1L << 5;
   private static final long RECORD_METADATA = 1L << 6;
-  private static final long RECORD_KNOWN_MASK = (1L << 15) - 1;
+  private static final long LEGACY_RECORD_KNOWN_MASK = (1L << 15) - 1;
+  private static final long RECORD_KNOWN_MASK = (1L << 17) - 1;
 
   private ProtocolDecoder() {}
 
@@ -419,11 +421,13 @@ public final class ProtocolDecoder {
   private static CursusMessage decodeRecord(byte[] data, String topic, int partition) {
     BinaryReader reader = new BinaryReader(data);
     int version = reader.uint16();
-    if (version != RECORD_VERSION) {
+    if (version != RECORD_VERSION && version != LEGACY_RECORD_VERSION) {
       throw new CursusProtocolException("Unsupported Wire v2 record version: " + version);
     }
     long presence = reader.uint64();
-    if ((presence & ~RECORD_KNOWN_MASK) != 0) {
+    long knownMask =
+        version == LEGACY_RECORD_VERSION ? LEGACY_RECORD_KNOWN_MASK : RECORD_KNOWN_MASK;
+    if ((presence & ~knownMask) != 0) {
       throw new CursusProtocolException("Wire v2 record contains unknown presence bits");
     }
     String recordTopic = reader.string();
@@ -461,6 +465,10 @@ public final class ProtocolDecoder {
     long controlCoordinatorEpoch = (presence & (1L << 12)) != 0 ? reader.uint64() : 0;
     byte[] controlKey = (presence & (1L << 13)) != 0 ? reader.bytes() : null;
     byte[] controlValue = (presence & (1L << 14)) != 0 ? reader.bytes() : null;
+    String eventId =
+        version == RECORD_VERSION && (presence & (1L << 15)) != 0 ? reader.string() : null;
+    String payloadDigest =
+        version == RECORD_VERSION && (presence & (1L << 16)) != 0 ? reader.string() : null;
     reader.finish();
     validateTransactionFields(transactionState, transactionMarker, controlBatchType);
 
@@ -484,6 +492,8 @@ public final class ProtocolDecoder {
         .controlBatchCoordinatorEpoch(controlCoordinatorEpoch)
         .controlBatchKey(controlKey)
         .controlBatchValue(controlValue)
+        .eventId(eventId)
+        .payloadDigest(payloadDigest)
         .build();
   }
 

@@ -158,6 +158,20 @@ public class CursusConsumer implements AutoCloseable {
     return running.get() && connectionManager.isConnected();
   }
 
+  /**
+   * Returns the current group generation for broker-native transactional processing.
+   *
+   * <p>A caller must obtain this immediately before beginning its transaction: a rebalance fences
+   * the previous member/generation pair.
+   */
+  public TransactionalOffsetMetadata transactionalOffsetMetadata() {
+    if (memberId == null || memberId.isBlank() || generation <= 0) {
+      throw new IllegalStateException("consumer has no active group assignment");
+    }
+    return new TransactionalOffsetMetadata(
+        config.getTopic(), config.getGroupId(), memberId, generation);
+  }
+
   void requestRebalance() {
     rebalanceRequired.set(true);
     stopPartitionConsumers();
@@ -345,13 +359,16 @@ public class CursusConsumer implements AutoCloseable {
             config.getHeartbeatIntervalMs(),
             TimeUnit.MILLISECONDS);
 
-    // Step 6: Start auto-commit loop
-    commitFuture =
-        commitScheduler.scheduleAtFixedRate(
-            this::commitAllOffsets,
-            config.getAutoCommitInterval().toMillis(),
-            config.getAutoCommitInterval().toMillis(),
-            TimeUnit.MILLISECONDS);
+    // Step 6: Broker-native processors disable normal acknowledgement and use
+    // SEND_OFFSETS_TO_TXN in the same transaction as their durable outputs.
+    if (config.isEnableAutoCommit()) {
+      commitFuture =
+          commitScheduler.scheduleAtFixedRate(
+              this::commitAllOffsets,
+              config.getAutoCommitInterval().toMillis(),
+              config.getAutoCommitInterval().toMillis(),
+              TimeUnit.MILLISECONDS);
+    }
 
     // Step 7: Wait for rebalance signal or shutdown
     while (running.get()) {

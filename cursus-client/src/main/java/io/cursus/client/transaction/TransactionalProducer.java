@@ -5,6 +5,7 @@ import io.cursus.client.protocol.CommandBuilder;
 import io.cursus.client.protocol.ProtocolDecoder;
 import java.util.ArrayList;
 import java.util.Collections;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 
@@ -15,7 +16,7 @@ public class TransactionalProducer implements AutoCloseable {
   private final String authToken;
   private String producerId = "";
   private long epoch;
-  private long seqNum;
+  private final Map<String, Long> sequenceByTopic = new HashMap<>();
 
   public TransactionalProducer(String transactionalId, List<String> brokers) {
     this(transactionalId, brokers, null, null, 5000, 3, 100);
@@ -100,7 +101,7 @@ public class TransactionalProducer implements AutoCloseable {
     ProtocolDecoder.ProducerSession session = ProtocolDecoder.decodeProducerSession(response);
     this.producerId = session.producerId();
     this.epoch = session.epoch();
-    this.seqNum = 0;
+    this.sequenceByTopic.clear();
     return session;
   }
 
@@ -116,20 +117,54 @@ public class TransactionalProducer implements AutoCloseable {
 
   public void publish(String topic, int partition, String message, String key) {
     ensureSession();
-    seqNum++;
+    long sequence = nextSequence(topic);
     String command =
         CommandBuilder.txnPublish(
             transactionalId,
             topic,
             partition,
             producerId,
-            seqNum,
+            sequence,
             epoch,
             message,
             key,
             principal,
             authToken);
     client.sendTransaction(transactionalId, command);
+  }
+
+  /**
+   * Stages one optimistic event-store append; it becomes visible only when the transaction commits.
+   */
+  public void appendStream(
+      String topic,
+      String key,
+      long expectedVersion,
+      String message,
+      String eventType,
+      int schemaVersion,
+      String metadata) {
+    if (topic == null || topic.isBlank() || key == null || key.isBlank() || expectedVersion <= 0) {
+      throw new IllegalArgumentException("topic, key, and positive expectedVersion are required");
+    }
+    ensureSession();
+    long sequence = nextSequence(topic);
+    client.sendTransaction(
+        transactionalId,
+        CommandBuilder.txnAppendStream(
+            transactionalId,
+            topic,
+            key,
+            expectedVersion,
+            producerId,
+            sequence,
+            epoch,
+            message,
+            eventType,
+            schemaVersion <= 0 ? 1 : schemaVersion,
+            metadata,
+            principal,
+            authToken));
   }
 
   public void sendOffsetsToTransaction(
@@ -181,6 +216,12 @@ public class TransactionalProducer implements AutoCloseable {
     if (producerId.isBlank()) {
       initProducerId();
     }
+  }
+
+  private long nextSequence(String topic) {
+    long sequence = sequenceByTopic.getOrDefault(topic, 0L) + 1;
+    sequenceByTopic.put(topic, sequence);
+    return sequence;
   }
 
   public String getProducerId() {
