@@ -79,13 +79,17 @@ public final class BrokerSagaRuntime {
               config.sagaType(), input.sagaId(), input.runId(), state, new ArrayList<>(), 0);
     }
 
+    // A failing handler can mutate the SagaState it receives. Keep those
+    // mutations isolated until a successful transition makes them durable.
+    SagaState transitionState = copyState(record.state);
     TransitionResult result;
     try {
-      result = handler.handle(record.state, input.event());
+      result = handler.handle(transitionState, input.event());
     } catch (Exception cause) {
       if (!newRun) recordFailure(input, record, currentVersion, cause);
       throw cause;
     }
+    record.state = transitionState;
 
     List<HistoryDraft> drafts = new ArrayList<>();
     if (newRun) drafts.add(new HistoryDraft("run.started"));
@@ -225,7 +229,7 @@ public final class BrokerSagaRuntime {
     private final String sagaType;
     private final String sagaId;
     private final String runId;
-    private final SagaState state;
+    private SagaState state;
     private final List<String> processedEventIds;
     private long version;
 
@@ -327,6 +331,12 @@ public final class BrokerSagaRuntime {
               "updated_at", value.getUpdatedAt().toString()));
     }
     return result;
+  }
+
+  static SagaState copyState(SagaState state) {
+    Map<String, Object> copy =
+        JSON.convertValue(JSON.valueToTree(stateToMap(state)), new TypeReference<>() {});
+    return stateFromMap(copy);
   }
 
   @SuppressWarnings("unchecked")

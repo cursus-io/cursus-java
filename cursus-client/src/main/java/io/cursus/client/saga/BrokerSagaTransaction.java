@@ -338,6 +338,10 @@ public final class BrokerSagaTransaction {
         + deterministicId(
                 "transaction",
                 config.serviceName(),
+                config.sagaType(),
+                input.group(),
+                input.sagaId(),
+                input.runId(),
                 input.sourceTopic(),
                 Integer.toString(input.sourcePartition()),
                 Long.toString(input.sourceOffset()),
