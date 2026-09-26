@@ -195,6 +195,31 @@ public final class BrokerSagaTransaction {
     }
   }
 
+  /** Acknowledge an already-recorded inbox event without emitting a second state or history event. */
+  public void acknowledgeDuplicate(Input input) {
+    TransactionalProducer producer = producers.create(transactionId(input, "duplicate"));
+    boolean committed = false;
+    try {
+      producer.beginTransaction();
+      producer.sendOffsetsToTransaction(
+          input.sourceTopic(),
+          input.group(),
+          input.member(),
+          input.generation(),
+          Map.of(input.sourcePartition(), input.sourceOffset() + 1));
+      producer.commitTransaction();
+      committed = true;
+    } finally {
+      if (!committed) {
+        try {
+          producer.abortTransaction();
+        } catch (RuntimeException ignored) {
+        }
+      }
+      producer.close();
+    }
+  }
+
   /**
    * Persists a handler-failure state and history record without its source offset. This is the required
    * fresh transaction after the successful transition has rolled back, so delivery remains retryable.
