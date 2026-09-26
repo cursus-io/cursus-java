@@ -86,7 +86,13 @@ public final class BrokerSagaRuntime {
     try {
       result = handler.handle(transitionState, input.event());
     } catch (Exception cause) {
-      if (!newRun) recordFailure(input, record, currentVersion, cause);
+      if (!newRun) {
+        try {
+          recordFailure(input, record, currentVersion, cause);
+        } catch (Exception recordingFailure) {
+          cause.addSuppressed(recordingFailure);
+        }
+      }
       throw cause;
     }
     record.state = transitionState;
@@ -120,7 +126,17 @@ public final class BrokerSagaRuntime {
 
   private StateRecord load(String sagaId, String runId) {
     StreamData stream = stateStore.readStream(streamKey(sagaId, runId));
-    if (stream.getEvents().isEmpty()) return null;
+    if (stream.getEvents().isEmpty()) {
+      if (stream.getSnapshot() == null) return null;
+      StateRecord record = StateRecord.fromJson(stream.getSnapshot().getPayload());
+      if (!config.sagaType().equals(record.sagaType)
+          || !sagaId.equals(record.sagaId)
+          || !runId.equals(record.runId)) {
+        throw new IllegalStateException("broker Saga state snapshot identity mismatch");
+      }
+      record.version = stream.getSnapshot().getVersion();
+      return record;
+    }
     StateRecord record =
         StateRecord.fromJson(stream.getEvents().get(stream.getEvents().size() - 1).getPayload());
     if (!config.sagaType().equals(record.sagaType)
