@@ -222,6 +222,42 @@ public final class CommandBuilder {
     return appendAuth(command, principal, authToken);
   }
 
+  public static String txnAppendStream(
+      String transactionalId,
+      String topic,
+      String key,
+      long expectedVersion,
+      String producerId,
+      long seqNum,
+      long epoch,
+      String message,
+      String eventType,
+      int schemaVersion,
+      String metadata,
+      String principal,
+      String authToken) {
+    String command =
+        "TXN_APPEND_STREAM transactional_id="
+            + transactionalId
+            + " topic="
+            + topic
+            + " key="
+            + key
+            + " expected_version="
+            + expectedVersion
+            + " producerId="
+            + producerId
+            + " seqNum="
+            + seqNum
+            + " epoch="
+            + epoch
+            + " schema_version="
+            + schemaVersion;
+    if (eventType != null && !eventType.isBlank()) command += " event_type=" + eventType;
+    if (metadata != null && !metadata.isBlank()) command += " metadata=" + metadata;
+    return appendAuth(command + " message=" + message, principal, authToken);
+  }
+
   public static String sendOffsetsToTxn(
       String transactionalId,
       String producerId,

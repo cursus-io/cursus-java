@@ -112,6 +112,25 @@ class CommandBuilderTest {
             "TXN_PUBLISH transactional_id=tx-1 topic=out partition=-1 producerId=p1 "
                 + "seqNum=3 epoch=2 key=k1 message=processed principal=alice auth_token=secret");
     assertThat(
+            CommandBuilder.txnAppendStream(
+                "tx-1",
+                "cursus.saga-state.v1",
+                "orders:order-42:run-1",
+                3,
+                "p1",
+                7,
+                2,
+                "{\"status\":\"WAITING\"}",
+                "saga.state.transitioned",
+                1,
+                "",
+                null,
+                null))
+        .isEqualTo(
+            "TXN_APPEND_STREAM transactional_id=tx-1 topic=cursus.saga-state.v1 "
+                + "key=orders:order-42:run-1 expected_version=3 producerId=p1 seqNum=7 epoch=2 "
+                + "schema_version=1 event_type=saga.state.transitioned message={\"status\":\"WAITING\"}");
+    assertThat(
             CommandBuilder.sendOffsetsToTxn(
                 "tx-1", "p1", 2, "input", "grp", "m1", 4, "P0:101,P2:202"))
         .isEqualTo(

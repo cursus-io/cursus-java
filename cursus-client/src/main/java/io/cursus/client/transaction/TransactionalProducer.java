@@ -132,6 +132,38 @@ public class TransactionalProducer implements AutoCloseable {
     client.sendTransaction(transactionalId, command);
   }
 
+  /** Stages one optimistic event-store append; it becomes visible only when the transaction commits. */
+  public void appendStream(
+      String topic,
+      String key,
+      long expectedVersion,
+      String message,
+      String eventType,
+      int schemaVersion,
+      String metadata) {
+    if (topic == null || topic.isBlank() || key == null || key.isBlank() || expectedVersion <= 0) {
+      throw new IllegalArgumentException("topic, key, and positive expectedVersion are required");
+    }
+    ensureSession();
+    seqNum++;
+    client.sendTransaction(
+        transactionalId,
+        CommandBuilder.txnAppendStream(
+            transactionalId,
+            topic,
+            key,
+            expectedVersion,
+            producerId,
+            seqNum,
+            epoch,
+            message,
+            eventType,
+            schemaVersion <= 0 ? 1 : schemaVersion,
+            metadata,
+            principal,
+            authToken));
+  }
+
   public void sendOffsetsToTransaction(
       String topic, String group, String member, int generation, Map<Integer, Long> offsets) {
     ensureSession();
