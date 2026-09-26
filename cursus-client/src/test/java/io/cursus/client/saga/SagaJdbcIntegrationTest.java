@@ -147,7 +147,8 @@ class SagaJdbcIntegrationTest {
             connection.prepareStatement(
                 "UPDATE cursus_saga_history_outbox SET status='PUBLISHED' WHERE history_event_id IN "
                     + "(SELECT history_event_id FROM cursus_saga_history WHERE saga_id=?) "
-                    + "AND history_event_id<>?")) {
+                    + "AND history_event_id<>?"
+                    + (postgres ? "::uuid" : ""))) {
       statement.setString(1, id);
       statement.setString(2, historyEventId);
       statement.executeUpdate();
@@ -157,7 +158,8 @@ class SagaJdbcIntegrationTest {
     try (var connection = dataSource.getConnection();
         var statement =
             connection.prepareStatement(
-                "SELECT status,attempts FROM cursus_saga_history_outbox WHERE history_event_id=?")) {
+                "SELECT status,attempts FROM cursus_saga_history_outbox WHERE history_event_id=?"
+                    + (postgres ? "::uuid" : ""))) {
       statement.setString(1, historyEventId);
       try (var rows = statement.executeQuery()) {
         rows.next();

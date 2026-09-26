@@ -60,7 +60,7 @@ public final class JdbcHistoryOutboxPublisher {
       String select =
           dialect == JdbcSagaTransaction.Dialect.POSTGRES
               ? "SELECT history_event_id::text,topic_name,payload::text FROM cursus_saga_history_outbox WHERE status='PENDING' OR(status='PUBLISHING' AND lease_expires_at<NOW()) ORDER BY created_at FOR UPDATE SKIP LOCKED LIMIT 1"
-              : "SELECT history_event_id,topic_name,CAST(payload AS CHAR) FROM cursus_saga_history_outbox WHERE status='PENDING' OR(status='PUBLISHING' AND lease_expires_at<UTC_TIMESTAMP(6)) ORDER BY created_at FOR UPDATE SKIP LOCKED LIMIT 1";
+              : "SELECT history_event_id,topic_name,CAST(payload AS CHAR) FROM cursus_saga_history_outbox WHERE status='PENDING' OR(status='PUBLISHING' AND lease_expires_at<UTC_TIMESTAMP(6)) ORDER BY created_at LIMIT 1 FOR UPDATE SKIP LOCKED";
       try (var s = c.createStatement();
           ResultSet r = s.executeQuery(select)) {
         if (!r.next()) {
