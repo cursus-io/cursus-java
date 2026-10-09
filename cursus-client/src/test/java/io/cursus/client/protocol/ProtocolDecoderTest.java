@@ -215,6 +215,12 @@ class ProtocolDecoderTest {
     assertThat(
             ProtocolDecoder.isCoordinatorFailure("ERROR: NOT_COORDINATOR host=127.0.0.1 port=9001"))
         .isTrue();
+    assertThat(
+            ProtocolDecoder.isCoordinatorFailure(
+                "ERROR: coordinator_not_available reason=\"registration pending\""))
+        .isTrue();
+    assertThat(ProtocolDecoder.isCoordinatorFailure("ERROR: offset_manager_not_available"))
+        .isTrue();
     assertThat(ProtocolDecoder.isStaleProducerEpoch("ERROR: stale_producer_epoch producer=p1"))
         .isTrue();
     assertThat(

@@ -233,3 +233,5 @@ long seq = producer.send(payload);
 See [Configuration Reference](configuration-reference.md) for all producer properties.
 
 If the broker returns `ERROR: stale_producer_epoch ...`, `idempotency_gap`, `idempotency gap`, `idempotency error`, or a first-message sequence error, the producer treats the session as fenced or terminal and does not retry it as a normal transient publish failure. Recreate the producer to start a new idempotent session.
+
+If a publish was submitted but its acknowledgement cannot be read, `flush()` and `close()` throw `CursusProducerOutcomeUnknownException`. A non-idempotent caller must reconcile application state before publishing the logical record again. Only an idempotent producer may automatically retry the same producer ID, epoch, and sequence range.

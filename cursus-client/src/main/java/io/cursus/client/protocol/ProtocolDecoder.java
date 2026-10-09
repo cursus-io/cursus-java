@@ -13,6 +13,7 @@ import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 
 /**
@@ -312,12 +313,15 @@ public final class ProtocolDecoder {
   }
 
   public static boolean isCoordinatorFailure(String response) {
-    return response != null
-        && (response.contains("GEN_MISMATCH")
-            || response.contains("NOT_OWNER")
-            || response.contains("member_not_found")
-            || response.contains("group_not_found")
-            || response.contains("NOT_COORDINATOR"));
+    if (response == null) return false;
+    String lower = response.toLowerCase(Locale.ROOT);
+    return lower.contains("gen_mismatch")
+        || lower.contains("not_owner")
+        || lower.contains("member_not_found")
+        || lower.contains("group_not_found")
+        || lower.contains("not_coordinator")
+        || lower.contains("coordinator_not_available")
+        || lower.contains("offset_manager_not_available");
   }
 
   public static boolean isTerminalProducerError(String response) {

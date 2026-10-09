@@ -2,7 +2,9 @@ package io.cursus.client.producer;
 
 import io.cursus.client.config.CursusProducerConfig;
 import io.cursus.client.connection.ConnectionManager;
+import io.cursus.client.exception.CursusConnectionException;
 import io.cursus.client.exception.CursusProducerClosedException;
+import io.cursus.client.exception.CursusProducerOutcomeUnknownException;
 import io.cursus.client.message.AckResponse;
 import io.cursus.client.message.CursusMessage;
 import io.cursus.client.metrics.CursusProducerMetrics;
@@ -19,6 +21,7 @@ import java.util.concurrent.*;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLong;
+import java.util.concurrent.atomic.AtomicReference;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 import org.slf4j.Logger;
@@ -35,11 +38,13 @@ public class CursusProducer implements AutoCloseable {
   private final ExecutorService flushExecutor;
   private final ScheduledExecutorService lingerScheduler;
   private final AtomicBoolean closed = new AtomicBoolean(false);
+  private final AtomicBoolean resourcesClosed = new AtomicBoolean(false);
   private final AtomicLong uniqueAckCount = new AtomicLong(0);
   private final AtomicInteger roundRobinCounter = new AtomicInteger(0);
   private final Map<Long, BatchState> batchStates = new ConcurrentHashMap<>();
   private final Set<CompletableFuture<Void>> inflightFutures = ConcurrentHashMap.newKeySet();
   private final AtomicLong batchIdGenerator = new AtomicLong(0);
+  private final AtomicReference<RuntimeException> deliveryFailure = new AtomicReference<>();
   private final Map<Integer, String> partitionLeaders = new ConcurrentHashMap<>();
   private final String producerId;
   private final int producerEpoch;
@@ -201,6 +206,7 @@ public class CursusProducer implements AutoCloseable {
 
   public long send(String payload, String key) {
     if (closed.get()) throw new CursusProducerClosedException();
+    throwDeliveryFailure();
 
     int partition =
         key != null
@@ -240,13 +246,18 @@ public class CursusProducer implements AutoCloseable {
         CompletableFuture.allOf(snapshot.toArray(new CompletableFuture[0]))
             .get(config.getFlushTimeoutMs(), TimeUnit.MILLISECONDS);
       } catch (TimeoutException e) {
-        log.warn("Flush timed out after {}ms", config.getFlushTimeoutMs());
+        throw new CursusProducerOutcomeUnknownException(
+            CursusProducerOutcomeUnknownException.UNKNOWN_PARTITION, "flush drain", e);
       } catch (InterruptedException e) {
         Thread.currentThread().interrupt();
+        throw new CursusConnectionException("Producer flush was interrupted", e);
       } catch (ExecutionException e) {
-        log.error("Flush failed", e.getCause());
+        Throwable cause = e.getCause();
+        if (cause instanceof RuntimeException runtime) throw runtime;
+        throw new CursusConnectionException("Producer flush failed", cause);
       }
     }
+    throwDeliveryFailure();
   }
 
   public long getUniqueAckCount() {
@@ -267,17 +278,28 @@ public class CursusProducer implements AutoCloseable {
 
   @Override
   public void close() {
-    if (closed.compareAndSet(false, true)) {
+    closed.set(true);
+    if (resourcesClosed.compareAndSet(false, true)) {
       lingerScheduler.shutdown();
-      flush();
-      flushExecutor.shutdown();
+      RuntimeException failure = null;
       try {
-        flushExecutor.awaitTermination(config.getFlushTimeoutMs(), TimeUnit.MILLISECONDS);
-      } catch (InterruptedException e) {
-        Thread.currentThread().interrupt();
+        flush();
+      } catch (RuntimeException exception) {
+        failure = exception;
+      } finally {
+        flushExecutor.shutdown();
+        try {
+          flushExecutor.awaitTermination(config.getFlushTimeoutMs(), TimeUnit.MILLISECONDS);
+        } catch (InterruptedException exception) {
+          Thread.currentThread().interrupt();
+          if (failure == null) {
+            failure = new CursusConnectionException("Producer close was interrupted", exception);
+          }
+        }
+        connectionManager.close();
       }
-      connectionManager.close();
       log.info("CursusProducer closed. Total acked: {}", uniqueAckCount.get());
+      if (failure != null) throw failure;
     }
   }
 
@@ -297,6 +319,7 @@ public class CursusProducer implements AutoCloseable {
         CompletableFuture.runAsync(
             () -> {
               long startNanos = System.nanoTime();
+              RuntimeException lastFailure = null;
               Backoff backoff =
                   new Backoff(Duration.ofMillis(100), Duration.ofMillis(config.getMaxBackoffMs()));
 
@@ -311,10 +334,11 @@ public class CursusProducer implements AutoCloseable {
                           config.isIdempotent(),
                           messages.get(0).getSeqNum());
 
+                  CompletableFuture<byte[]> response =
+                      connectionManager.sendOnPartition(partition, encoded);
                   byte[] responseBytes =
-                      connectionManager
-                          .sendOnPartition(partition, encoded)
-                          .get(config.getWriteTimeoutMs(), TimeUnit.MILLISECONDS);
+                      awaitBatchResponse(
+                          response, config.getWriteTimeoutMs(), partition, "acknowledgement");
 
                   if ("0".equals(config.getAcks().protocolValue())) {
                     state.setAcknowledged(true);
@@ -322,7 +346,13 @@ public class CursusProducer implements AutoCloseable {
                     return;
                   }
 
-                  AckResponse ack = ProtocolDecoder.decodeAckResponse(responseBytes);
+                  AckResponse ack;
+                  try {
+                    ack = ProtocolDecoder.decodeAckResponse(responseBytes);
+                  } catch (RuntimeException exception) {
+                    throw new CursusProducerOutcomeUnknownException(
+                        partition, "acknowledgement parsing", exception);
+                  }
                   if (ack.isOk()) {
                     state.setAcknowledged(true);
                     uniqueAckCount.addAndGet(messages.size());
@@ -336,20 +366,21 @@ public class CursusProducer implements AutoCloseable {
                   }
 
                   if (ack.hasError()) {
+                    RuntimeException brokerFailure =
+                        ProtocolDecoder.errorFromResponse(ack.getErrorMsg());
                     if (ProtocolDecoder.isTerminalProducerError(ack)) {
                       closed.set(true);
-                      batchStates.remove(batchId);
-                      if (metrics != null) metrics.recordFailure(messages.size());
                       log.error(
                           "Producer fenced by terminal idempotency error: {}", ack.getErrorMsg());
-                      return;
+                      lastFailure = brokerFailure;
+                      break;
                     }
                     if (!shouldRetry(ack, config.isIdempotent())) {
-                      batchStates.remove(batchId);
-                      if (metrics != null) metrics.recordFailure(messages.size());
                       log.error("Non-retryable batch error: {}", ack.getErrorMsg());
-                      return;
+                      lastFailure = brokerFailure;
+                      break;
                     }
+                    lastFailure = brokerFailure;
                     if ("not_leader".equalsIgnoreCase(ack.getErrorCode())) {
                       String leader =
                           ack.getErrorFields() == null ? null : ack.getErrorFields().get("leader");
@@ -363,9 +394,18 @@ public class CursusProducer implements AutoCloseable {
                     }
                     log.warn("Batch error: {}", ack.getErrorMsg());
                   }
-                } catch (TimeoutException e) {
-                  log.warn("Batch send timeout on attempt {}", attempt + 1);
+                } catch (CursusProducerOutcomeUnknownException e) {
+                  lastFailure = e;
+                  log.warn(
+                      "Batch outcome unknown on attempt {} for partition {} during {}",
+                      attempt + 1,
+                      partition,
+                      e.getStage());
                 } catch (Exception e) {
+                  lastFailure =
+                      e instanceof RuntimeException runtime
+                          ? runtime
+                          : new CursusConnectionException("Batch send failed", e);
                   log.warn("Batch send failed on attempt {}: {}", attempt + 1, e.getMessage());
                 }
 
@@ -375,7 +415,8 @@ public class CursusProducer implements AutoCloseable {
                     Thread.sleep(backoff.nextBackoff().toMillis());
                   } catch (InterruptedException ie) {
                     Thread.currentThread().interrupt();
-                    return;
+                    lastFailure = new CursusConnectionException("Batch retry was interrupted", ie);
+                    break;
                   }
                   if (metrics != null) metrics.recordRetry();
                 }
@@ -383,6 +424,11 @@ public class CursusProducer implements AutoCloseable {
               batchStates.remove(batchId);
               log.error("Batch {} failed after {} retries", batchId, config.getMaxRetries());
               if (metrics != null) metrics.recordFailure(messages.size());
+              recordDeliveryFailure(
+                  lastFailure != null
+                      ? lastFailure
+                      : new CursusConnectionException(
+                          "Batch " + batchId + " failed without a broker acknowledgement"));
             },
             flushExecutor);
 
@@ -393,6 +439,30 @@ public class CursusProducer implements AutoCloseable {
 
   static boolean shouldRetry(AckResponse ack, boolean idempotent) {
     return idempotent && ack != null && ack.isRetryable();
+  }
+
+  static byte[] awaitBatchResponse(
+      CompletableFuture<byte[]> response, long timeoutMs, int partition, String stage) {
+    try {
+      return response.get(timeoutMs, TimeUnit.MILLISECONDS);
+    } catch (TimeoutException exception) {
+      throw new CursusProducerOutcomeUnknownException(partition, stage, exception);
+    } catch (ExecutionException exception) {
+      Throwable cause = exception.getCause() == null ? exception : exception.getCause();
+      throw new CursusProducerOutcomeUnknownException(partition, stage, cause);
+    } catch (InterruptedException exception) {
+      Thread.currentThread().interrupt();
+      throw new CursusProducerOutcomeUnknownException(partition, stage, exception);
+    }
+  }
+
+  private void recordDeliveryFailure(RuntimeException failure) {
+    deliveryFailure.compareAndSet(null, failure);
+  }
+
+  private void throwDeliveryFailure() {
+    RuntimeException failure = deliveryFailure.get();
+    if (failure != null) throw failure;
   }
 
   public record PartitionStat(int partitionId, int pendingCount) {}
